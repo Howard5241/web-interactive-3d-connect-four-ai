@@ -1,0 +1,20 @@
+# Python virtual environment
+venv/
+/venv/
+__pycache__/
+
+# IDE and OS files
+.vscode/
+.idea/
+*.DS_Store
+
+# Large model files (IMPORTANT!)
+# We will handle this with Git LFS later if needed, but we should ignore it by default.
+models/model_best.pth
+
+# Flask session files
+.webassets-cache/
+instance/
+
+# Self-play logs (optional, but good to ignore if they get large)
+self_play_logs/
