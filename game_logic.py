@@ -127,7 +127,69 @@ class ConnectFour3D():
         for action in moves: state = self.get_next_state(state, action)
         return state
     
+    def get_symmetries(self, state: np.ndarray, policy: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
+        """
+        Generates symmetrical versions of a state and its corresponding policy.
+        This implementation provides the 8 symmetries of the square (rotations and flips).
 
+        Args:
+            state (np.ndarray): The (4, 4, 4) board state.
+            policy (np.ndarray): The (16,) policy vector.
+
+        Returns:
+            A list of tuples, where each tuple contains a (symmetric_state, symmetric_policy).
+        """
+        symmetries = []
+        policy_grid = policy.reshape(self.rows, self.cols)
+        # Iterate through 4 rotations (0, 90, 180, 270 degrees)
+        for k in range(4):
+            # Rotate the state's height and width axes
+            rotated_state = np.rot90(state, k, axes=(1, 2))
+            
+            # Rotate the policy grid's row and column axes
+            rotated_policy_grid = np.rot90(policy_grid, k, axes=(0, 1))
+
+            # Symmetry 1: Just the rotation
+            symmetries.append((rotated_state, rotated_policy_grid.flatten()))
+
+            # Symmetry 2: Rotation followed by a flip (left-to-right)
+            # Flip the state across its width axis
+            flipped_rotated_state = np.flip(rotated_state, axis=2)
+            
+            # Flip the policy grid across its column axis
+            flipped_rotated_policy_grid = np.flip(rotated_policy_grid, axis=1)
+            
+            symmetries.append((flipped_rotated_state, flipped_rotated_policy_grid.flatten()))
+        
+        # Remove any potential duplicates that might arise from perfectly symmetrical states
+        unique_symmetries = []
+        seen_states = set()
+        for s, p in symmetries:
+            s_bytes = s.tobytes() # Convert array to a hashable bytes object
+            if s_bytes not in seen_states:
+                unique_symmetries.append((s, p))
+                seen_states.add(s_bytes)
+        
+        return unique_symmetries
+    def get_basic_state_from_encoded_state(self, encoded_state: np.ndarray) -> np.ndarray:
+        """
+        Converts an encoded state back to the basic board representation.
+        
+        Args:
+            encoded_state (np.ndarray): The (4, 4, 4, 4) encoded state.
+        
+        Returns:
+            np.ndarray: The (4, 4, 4) basic board state.
+        """
+        basic_state = self.get_initial_state()
+        
+        # Plane 1: First Player's Pieces (value 1)
+        basic_state[encoded_state[0] == 1] = 1
+        # Plane 2: Second Player's Pieces (value -1)
+        basic_state[encoded_state[1] == 1] = -1
+        # Plane 3: Empty Spaces (value 0) - already initialized to 0
+        return basic_state
+    
     def _generate_winning_patterns(self) -> np.ndarray:
         """
         Generates all winning patterns as bitmasks for a 4x4x4 cube.

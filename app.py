@@ -21,11 +21,11 @@ print(f"Using device: {device}")
 # Game and AI Hyperparameters (should match your trained model's config)
 args = {
     'C': 2.0,
-    'num_simulations': 50, # Number of MCTS simulations for AI move
-    'num_resBlocks': 20,
-    'num_hidden': 512,
+    'num_simulations': 1000, # Number of MCTS simulations for AI move
+    'num_resBlocks': 4,
+    'num_hidden': 64,
     # Add other args if your MCTS needs them (e.g., dirichlet)
-    'dirichlet_epsilon': 0.25,
+    'dirichlet_epsilon': 0.0,
     'dirichlet_alpha': 0.3,
 }
 

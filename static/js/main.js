@@ -5,10 +5,11 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 let scene, camera, renderer, controls;
 let clickTargets = []; // Invisible planes for detecting clicks
 let pieces = []; // To hold the visible game pieces
-let isPlayerTurn = false;
+let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
 
 const STATUS_MSG = document.getElementById('status-message');
 const NEW_GAME_BTN = document.getElementById('new-game-btn');
+const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new button
 
 // --- INITIALIZATION ---
 
@@ -47,12 +48,13 @@ function init() {
     window.addEventListener('resize', onWindowResize);
     renderer.domElement.addEventListener('mousedown', onColumnClick);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
+    AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
 
     // Start Animation Loop
     animate();
 }
 
-// --- 3D BOARD DRAWING ---
+// --- 3D BOARD DRAWING --- (No changes in this section)
 
 function drawBoardGrid() {
     const material = new THREE.LineBasicMaterial({ color: 0x555555 });
@@ -108,10 +110,7 @@ function updateBoard(boardState) {
                 if (pieceValue !== 0) {
                     const material = (pieceValue === 1) ? playerMat : aiMat;
                     const piece = new THREE.Mesh(pieceGeo, material);
-                    // Map array indices to 3D scene coordinates
-                    // Our array is (depth, row, col), scene is (x, y, z)
-                    // Scene Y is our board depth (z-index)
-                    piece.position.set(x, 3 - z, y); // Invert z for top-down board
+                    piece.position.set(x, 3 - z, y); 
                     scene.add(piece);
                     pieces.push(piece);
                 }
@@ -121,93 +120,114 @@ function updateBoard(boardState) {
 }
 
 
-// --- GAME LOGIC & SERVER COMMUNICATION (MODIFIED SECTION) ---
+// --- GAME LOGIC & SERVER COMMUNICATION (MODIFIED) ---
+
+function setButtonsDisabled(state) {
+    NEW_GAME_BTN.disabled = state;
+    AI_MOVE_BTN.disabled = state;
+}
 
 async function startNewGame() {
     STATUS_MSG.textContent = 'Starting new game...';
+    setButtonsDisabled(true);
+    isRequestInProgress = true;
+
     try {
         const response = await fetch('/api/new_game', { method: 'POST' });
         if (!response.ok) throw new Error('Network response was not ok');
         const data = await response.json();
         updateBoard(data.board);
-        STATUS_MSG.textContent = 'Your turn! Click a column to play.';
-        isPlayerTurn = true;
+        STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
     } catch (error) {
         console.error('Error starting new game:', error);
         STATUS_MSG.textContent = 'Error: Could not start new game.';
+    } finally {
+        setButtonsDisabled(false);
+        isRequestInProgress = false;
     }
 }
 
-// THIS FUNCTION IS REWRITTEN
 async function handlePlayerMove(column) {
-    if (!isPlayerTurn) return;
+    if (isRequestInProgress) return;
 
-    isPlayerTurn = false; // Disable clicks immediately
+    isRequestInProgress = true;
+    setButtonsDisabled(true);
     STATUS_MSG.textContent = 'Processing your move...';
 
     try {
-        // --- Call 1: Send player's move and get instant feedback ---
-        const playerResponse = await fetch('/api/player_move', {
+        const response = await fetch('/api/player_move', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ column: column }),
         });
 
-        if (!playerResponse.ok) {
-            const errorData = await playerResponse.json();
+        if (!response.ok) {
+            const errorData = await response.json();
             throw new Error(errorData.error || 'Invalid move or server error.');
         }
 
-        const playerData = await playerResponse.json();
-        
-        // INSTANT UPDATE: Show the player's piece on the board
-        updateBoard(playerData.board);
+        const data = await response.json();
+        updateBoard(data.board);
 
-        // Check if the player's move ended the game
-        if (playerData.status === 'Game Over') {
-            if (playerData.winner === 'Player') {
+        if (data.status === 'Game Over') {
+            if (data.winner === 'Player') {
                 STATUS_MSG.textContent = 'Congratulations, you win! 🎉';
             } else {
                 STATUS_MSG.textContent = 'It\'s a draw!';
             }
-            return; // Stop execution, the game is over
+            AI_MOVE_BTN.disabled = true; // Game is over, disable AI move
+        } else {
+            STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
+            setButtonsDisabled(false); // Re-enable for next move
         }
 
-        // --- If game is not over, proceed to get AI's move ---
-        STATUS_MSG.textContent = 'AI is thinking... 🤔';
-        
-        // Add a small delay for better UX, makes the AI feel like it's "thinking"
+    } catch (error) {
+        console.error('Error during player move:', error);
+        STATUS_MSG.textContent = `Error: ${error.message}`;
+        setButtonsDisabled(false); // Re-enable on error
+    } finally {
+        isRequestInProgress = false;
+    }
+}
+
+// New function to handle the AI move request
+async function requestAIMove() {
+    if (isRequestInProgress) return;
+
+    isRequestInProgress = true;
+    setButtonsDisabled(true);
+    STATUS_MSG.textContent = 'AI is thinking... 🤔';
+
+    try {
+        // Add a small delay for better UX
         await new Promise(resolve => setTimeout(resolve, 500)); 
         
-        // --- Call 2: Ask the server to compute the AI's move ---
-        const aiResponse = await fetch('/api/ai_move', { method: 'POST' });
-        if (!aiResponse.ok) throw new Error('AI server error.');
+        const response = await fetch('/api/ai_move', { method: 'POST' });
+        if (!response.ok) throw new Error('AI server error.');
         
-        const aiData = await aiResponse.json();
+        const data = await response.json();
+        updateBoard(data.board);
 
-        // UPDATE AGAIN: Show the AI's piece on the board
-        updateBoard(aiData.board);
-
-        // Check if the AI's move ended the game
-        if (aiData.status === 'Game Over') {
-             if (aiData.winner === 'AI') {
+        if (data.status === 'Game Over') {
+             if (data.winner === 'AI') {
                 STATUS_MSG.textContent = 'The AI wins! Better luck next time.';
             } else {
                 STATUS_MSG.textContent = 'It\'s a draw!';
             }
+             AI_MOVE_BTN.disabled = true; // Game is over
         } else {
-            // Game continues, it's the player's turn again
-            STATUS_MSG.textContent = 'Your turn!';
-            isPlayerTurn = true;
+            STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
+            setButtonsDisabled(false); // Re-enable for next move
         }
 
     } catch (error) {
-        console.error('Error during game turn:', error);
+        console.error('Error during AI move:', error);
         STATUS_MSG.textContent = `Error: ${error.message}`;
-        isPlayerTurn = true; // Allow player to try again
+        setButtonsDisabled(false); // Re-enable on error
+    } finally {
+        isRequestInProgress = false;
     }
 }
-
 
 // --- EVENT HANDLERS & ANIMATION ---
 
@@ -218,7 +238,7 @@ function onWindowResize() {
 }
 
 function onColumnClick(event) {
-    if (!isPlayerTurn) return;
+    if (isRequestInProgress) return;
 
     const mouse = new THREE.Vector2();
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
