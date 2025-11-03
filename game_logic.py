@@ -40,6 +40,10 @@ class ConnectFour3D():
     def get_initial_state(self)-> np.ndarray: 
         """Returns the initial empty board state."""
         return np.zeros(self.grid_shape, dtype=np.int8)
+    
+    def get_num_pieces(self, state: np.ndarray) -> int:
+        """Returns the total number of pieces on the board."""
+        return np.count_nonzero(state != 0)
 
     def get_current_player(self, state: np.ndarray = None) -> int:
         """
@@ -122,10 +126,44 @@ class ConnectFour3D():
         player_bitboard = self._create_bitboard(state, last_player)
         return bool(np.any((player_bitboard & self._winning_patterns) == self._winning_patterns))
     
-    def get_state_from_moves(self, moves: list[int]) -> np.ndarray:
+    def check_game_over(self, state: np.ndarray) -> bool:
+        """Checks if the game is over due to a win or a draw."""
+        last_player = -self.get_current_player(state)
+        current_player = self.get_current_player(state)
+        last_player_bitboard = self._create_bitboard(state, last_player)
+        current_player_bitboard = self._create_bitboard(state, current_player)
+
+        return bool(np.any((last_player_bitboard & self._winning_patterns) == self._winning_patterns)) or \
+                bool(np.any((current_player_bitboard & self._winning_patterns) == self._winning_patterns)) or \
+                    self.get_num_pieces(state) == self.num_cells
+    
+    def get_state_from_moves(self, moves: list[int]) -> tuple[np.ndarray, list[int]]:
+        """
+        Generates a state from a list of moves with validation.
+
+        Args:
+            moves (list[int]): A list of action integers.
+
+        Returns:
+            A tuple containing:
+            - np.ndarray: The resulting board state.
+            - list[int]: The list of moves that were successfully applied.
+        """
         state = self.get_initial_state()
-        for action in moves: state = self.get_next_state(state, action)
-        return state
+        applied_moves = []
+        for action in moves:
+            if not (0 <= action < self.num_actions):
+                break # Stop if move is out of bounds
+            
+            valid_moves = self.get_valid_moves(state)
+            if valid_moves[action] == 0:
+                break # Stop if move is invalid for the current state
+
+            state = self.get_next_state(state, action)
+            applied_moves.append(action)
+            if self.check_game_over(state):
+                break # Stop if the game is over
+        return state, applied_moves
     
     def get_symmetries(self, state: np.ndarray, policy: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
         """

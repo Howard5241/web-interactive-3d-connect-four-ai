@@ -10,6 +10,12 @@ let isRequestInProgress = false; // Prevents multiple clicks while waiting for t
 const STATUS_MSG = document.getElementById('status-message');
 const NEW_GAME_BTN = document.getElementById('new-game-btn');
 const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new button
+const LOG_BOX = document.getElementById('log-box');
+const MOVE_HISTORY_BOX = document.getElementById('move-history-box');
+const MOVE_INPUT = document.getElementById('move-input');
+
+let moveHistory = [];
+let currentMoveIndex = 0;
 
 // --- INITIALIZATION ---
 
@@ -49,6 +55,8 @@ function init() {
     renderer.domElement.addEventListener('mousedown', onColumnClick);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
+    window.addEventListener('keydown', handleKeyDown);
+    MOVE_INPUT.addEventListener('keydown', handleMoveInputChange);
 
     // Start Animation Loop
     animate();
@@ -100,15 +108,15 @@ function updateBoard(boardState) {
     pieces = [];
 
     const pieceGeo = new THREE.SphereGeometry(0.4, 32, 32);
-    const playerMat = new THREE.MeshStandardMaterial({ color: 0xff4136, roughness: 0.5 }); // Red
-    const aiMat = new THREE.MeshStandardMaterial({ color: 0xffdc00, roughness: 0.5 }); // Yellow
+    const player1Mat = new THREE.MeshStandardMaterial({ color: 0xffdc00, roughness: 0.5 }); // Yellow
+    const player2Mat = new THREE.MeshStandardMaterial({ color: 0xf50000, roughness: 0.5 }); // Red
 
     for (let z = 0; z < 4; z++) { // Depth
         for (let y = 0; y < 4; y++) { // Row
             for (let x = 0; x < 4; x++) { // Col
                 const pieceValue = boardState[z][y][x];
                 if (pieceValue !== 0) {
-                    const material = (pieceValue === 1) ? playerMat : aiMat;
+                    const material = (pieceValue === 1) ? player1Mat : player2Mat;
                     const piece = new THREE.Mesh(pieceGeo, material);
                     piece.position.set(x, 3 - z, y); 
                     scene.add(piece);
@@ -119,8 +127,40 @@ function updateBoard(boardState) {
     }
 }
 
+function updateMoveHistory(newMoveHistory) {
+    moveHistory = newMoveHistory;
+    MOVE_HISTORY_BOX.innerHTML = ''; // Clear existing move history
+    moveHistory.forEach((move, index) => {
+        const moveBox = document.createElement('div');
+        moveBox.classList.add('move-box');
+        moveBox.classList.add(index % 2 === 0 ? 'move-player1' : 'move-player2');
+        
+        // Highlight the currently viewed move
+        if (index === currentMoveIndex - 1) {
+            moveBox.classList.add('current-move');
+        }
+
+        moveBox.textContent = move;
+        MOVE_HISTORY_BOX.appendChild(moveBox);
+    });
+    MOVE_HISTORY_BOX.scrollTop = MOVE_HISTORY_BOX.scrollHeight;
+}
+
 
 // --- GAME LOGIC & SERVER COMMUNICATION (MODIFIED) ---
+
+function logMessage(message) {
+    // Update the main status message
+    STATUS_MSG.textContent = message;
+
+    // Create and add the log entry to the scroll box
+    const logEntry = document.createElement('p');
+    logEntry.textContent = `> ${message}`;
+    LOG_BOX.appendChild(logEntry);
+
+    // Automatically scroll to the bottom of the log box
+    LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
+}
 
 function setButtonsDisabled(state) {
     NEW_GAME_BTN.disabled = state;
@@ -128,7 +168,7 @@ function setButtonsDisabled(state) {
 }
 
 async function startNewGame() {
-    STATUS_MSG.textContent = 'Starting new game...';
+    logMessage('Starting new game...');
     setButtonsDisabled(true);
     isRequestInProgress = true;
 
@@ -137,10 +177,12 @@ async function startNewGame() {
         if (!response.ok) throw new Error('Network response was not ok');
         const data = await response.json();
         updateBoard(data.board);
-        STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
+        currentMoveIndex = 0;
+        updateMoveHistory(data.move_history);
+        logMessage('Your turn! Click a column or let the AI play.');
     } catch (error) {
         console.error('Error starting new game:', error);
-        STATUS_MSG.textContent = 'Error: Could not start new game.';
+        logMessage('Error: Could not start new game.');
     } finally {
         setButtonsDisabled(false);
         isRequestInProgress = false;
@@ -149,10 +191,22 @@ async function startNewGame() {
 
 async function handlePlayerMove(column) {
     if (isRequestInProgress) return;
+    if (currentMoveIndex !== moveHistory.length) {
+        logMessage('You must be at the most recent move to play.');
+        return;
+    }
 
     isRequestInProgress = true;
+    // If the current board state indicates game over, do not proceed
+    const gameStatusResponse = await fetch('/api/game_status');
+    const gameStatus = await gameStatusResponse.json();
+    if (gameStatus.status === 'Game Over') {
+        logMessage('Game is over. Please start a new game.');
+        isRequestInProgress = false;
+        return;
+    }
     setButtonsDisabled(true);
-    STATUS_MSG.textContent = 'Processing your move...';
+    logMessage('Processing your move...');
 
     try {
         const response = await fetch('/api/player_move', {
@@ -168,22 +222,25 @@ async function handlePlayerMove(column) {
 
         const data = await response.json();
         updateBoard(data.board);
+        currentMoveIndex = data.move_history.length;
+        updateMoveHistory(data.move_history);
 
         if (data.status === 'Game Over') {
-            if (data.winner === 'Player') {
-                STATUS_MSG.textContent = 'Congratulations, you win! 🎉';
+            if (data.winner === 'Draw') {
+                logMessage('It\'s a draw!');
             } else {
-                STATUS_MSG.textContent = 'It\'s a draw!';
+                logMessage('Congratulations, you win! 🎉');
             }
             AI_MOVE_BTN.disabled = true; // Game is over, disable AI move
+            NEW_GAME_BTN.disabled = false; // Enable new game button
         } else {
-            STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
+            logMessage('Your turn! Click a column or let the AI play.');
             setButtonsDisabled(false); // Re-enable for next move
         }
 
     } catch (error) {
         console.error('Error during player move:', error);
-        STATUS_MSG.textContent = `Error: ${error.message}`;
+        logMessage(`Error: ${error.message}`);
         setButtonsDisabled(false); // Re-enable on error
     } finally {
         isRequestInProgress = false;
@@ -193,10 +250,14 @@ async function handlePlayerMove(column) {
 // New function to handle the AI move request
 async function requestAIMove() {
     if (isRequestInProgress) return;
+    if (currentMoveIndex !== moveHistory.length) {
+        logMessage('You must be at the most recent move to play.');
+        return;
+    }
 
     isRequestInProgress = true;
     setButtonsDisabled(true);
-    STATUS_MSG.textContent = 'AI is thinking... 🤔';
+    logMessage('AI is thinking... 🤔');
 
     try {
         // Add a small delay for better UX
@@ -207,29 +268,165 @@ async function requestAIMove() {
         
         const data = await response.json();
         updateBoard(data.board);
+        currentMoveIndex = data.move_history.length;
+        updateMoveHistory(data.move_history);
 
         if (data.status === 'Game Over') {
-             if (data.winner === 'AI') {
-                STATUS_MSG.textContent = 'The AI wins! Better luck next time.';
+            if (data.winner === 'Draw') {
+                logMessage('It\'s a draw!');
             } else {
-                STATUS_MSG.textContent = 'It\'s a draw!';
+                logMessage('AI wins! Better luck next time. 🤖');
             }
-             AI_MOVE_BTN.disabled = true; // Game is over
+            AI_MOVE_BTN.disabled = true; // Game is over
+            NEW_GAME_BTN.disabled = false; // Enable new game button
         } else {
-            STATUS_MSG.textContent = 'Your turn! Click a column or let the AI play.';
+            logMessage('Your turn! Click a column or let the AI play.');
             setButtonsDisabled(false); // Re-enable for next move
         }
 
     } catch (error) {
         console.error('Error during AI move:', error);
-        STATUS_MSG.textContent = `Error: ${error.message}`;
+        logMessage(`Error: ${error.message}`);
         setButtonsDisabled(false); // Re-enable on error
     } finally {
         isRequestInProgress = false;
     }
 }
 
+async function navigateHistory(direction) {
+    const newIndex = currentMoveIndex + direction;
+
+    if (newIndex < 0 || newIndex > moveHistory.length) {
+        return; // Out of bounds
+    }
+
+    currentMoveIndex = newIndex;
+    const isViewingLive = currentMoveIndex === moveHistory.length;
+
+    setButtonsDisabled(true); // Disable buttons during navigation
+    isRequestInProgress = true;
+
+    const movesToDisplay = moveHistory.slice(0, currentMoveIndex);
+    const movesString = movesToDisplay.join(',');
+
+    try {
+        const response = await fetch(`/api/state_from_moves/${movesString}`);
+        if (!response.ok) throw new Error('Failed to fetch historical state.');
+        
+        const data = await response.json();
+        updateBoard(data.board);
+        updateMoveHistory(moveHistory); // Redraw to update highlighting
+
+        if (isViewingLive) {
+            logMessage('Viewing the most recent move. Your turn!');
+            setButtonsDisabled(false); // Re-enable buttons
+        } else {
+            logMessage(`Viewing move ${currentMoveIndex} of ${moveHistory.length}.`);
+        }
+
+    } catch (error) {
+        console.error('Error navigating history:', error);
+        logMessage('Error: Could not load position.');
+    } finally {
+        // Only re-enable buttons if we are back at the live position
+        if (currentMoveIndex === moveHistory.length) {
+            setButtonsDisabled(false);
+        }
+        isRequestInProgress = false;
+    }
+}
+
 // --- EVENT HANDLERS & ANIMATION ---
+
+function handleMoveInputChange(event) {
+    if (event.key !== 'Enter') {
+        return;
+    }
+
+    const movesString = MOVE_INPUT.value.trim();
+    if (!movesString) {
+        return; // Do nothing if input is empty
+    }
+
+    // Convert space-separated numbers to a comma-separated string for the API
+    const movesForApi = movesString.split(/\s+/).join(',');
+
+    // Immediately clear the input and show loading state
+    MOVE_INPUT.value = '';
+    logMessage(`Loading position from moves: ${movesString}`);
+    setButtonsDisabled(true);
+    isRequestInProgress = true;
+
+    let newBoardState;
+    let appliedMoves;
+
+    // Step 1: Get the state from the moves string
+    fetch(`/api/state_from_moves/${movesForApi}`)
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to fetch state from moves.');
+            return response.json();
+        })
+        .then(data => {
+            if (data.error) {
+                logMessage(`Warning: ${data.error}`);
+            }
+            newBoardState = data.board;
+            appliedMoves = data.moves_applied;
+
+            // Step 2: Set the new state on the server's session
+            return fetch('/api/set_state', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    board_state: newBoardState,
+                    move_history: appliedMoves
+                }),
+            });
+        })
+        .then(response => {
+            if (!response.ok) throw new Error('Failed to set the new state on the server.');
+            
+            // Step 3: Update the UI now that the server state is synced
+            logMessage('Board updated to the specified position.');
+            updateBoard(newBoardState);
+            currentMoveIndex = appliedMoves.length;
+            updateMoveHistory(appliedMoves);
+
+            // Step 4: Check the status of the new board state
+            return fetch('/api/game_status');
+        })
+        .then(response => response.json())
+        .then(statusData => {
+            if (statusData.status === 'Game Over') {
+                logMessage(`Game is over. Winner: ${statusData.winner}`);
+                AI_MOVE_BTN.disabled = true;
+            } else {
+                logMessage('Viewing the new position. Your turn!');
+            }
+        })
+        .catch(error => {
+            console.error('Error loading from move string:', error);
+            logMessage(`Error: ${error.message}`);
+        })
+        .finally(() => {
+            setButtonsDisabled(false);
+            isRequestInProgress = false;
+        });
+}
+
+function handleKeyDown(event) {
+    // Prevent arrow key navigation when the input is focused
+    if (document.activeElement === MOVE_INPUT) {
+        return;
+    }
+    if (isRequestInProgress) return;
+
+    if (event.key === 'ArrowLeft') {
+        navigateHistory(-1);
+    } else if (event.key === 'ArrowRight') {
+        navigateHistory(1);
+    }
+}
 
 function onWindowResize() {
     camera.aspect = window.innerWidth / window.innerHeight;
