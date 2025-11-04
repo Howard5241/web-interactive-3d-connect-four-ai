@@ -26,8 +26,28 @@ body {
     box-shadow: 0 4px 15px rgba(0,0,0,0.5);
 }
 
+.title-container {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+#settings-btn {
+    background: none;
+    border: none;
+    color: #ffa500;
+    font-size: 1.5em;
+    cursor: pointer;
+    padding: 0 5px;
+}
+
+#settings-btn:hover {
+    color: #ffc14d;
+}
+
 h1 {
     margin-top: 0;
+    margin-bottom: 10px; /* Adjusted from margin-top only */
     color: #ffa500;
 }
 
@@ -203,4 +223,94 @@ h1 {
 
 #move-history-box::-webkit-scrollbar-thumb:hover {
     background: #777;
+}
+
+/* Settings Modal Styles */
+#settings-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    z-index: 100;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    opacity: 1;
+    transition: opacity 0.3s ease;
+}
+
+#settings-modal {
+    background-color: #2a2a2a;
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 5px 20px rgba(0,0,0,0.7);
+    width: 90%;
+    max-width: 500px;
+    position: relative;
+    transform: translateY(0);
+    transition: transform 0.3s ease-out, opacity 0.3s ease-out;
+    opacity: 1;
+}
+
+#settings-modal-overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+#settings-modal-overlay.hidden #settings-modal {
+    transform: translateY(-50px);
+    opacity: 0;
+}
+
+#close-settings-btn {
+    position: absolute;
+    top: 10px;
+    right: 15px;
+    background: none;
+    border: none;
+    color: #aaa;
+    font-size: 2em;
+    cursor: pointer;
+    line-height: 1;
+}
+
+#close-settings-btn:hover {
+    color: #fff;
+}
+
+#settings-modal h2 {
+    margin-top: 0;
+    color: #ffa500;
+}
+
+.settings-content {
+    min-height: 200px; /* For the empty window effect */
+    padding-top: 10px;
+}
+
+.slider-container {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.slider-container label {
+    font-weight: bold;
+    flex-basis: 120px;
+}
+
+.slider-container input[type="range"] {
+    flex-grow: 1;
+    margin: 0 15px;
+    cursor: pointer;
+}
+
+.slider-container span {
+    width: 40px;
+    text-align: right;
+    font-weight: bold;
+    color: #ffa500;
 }

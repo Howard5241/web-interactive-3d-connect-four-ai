@@ -211,7 +211,9 @@ def game_status():
     
     return jsonify({
         "status": status,
-        "winner": winner
+        "winner": winner,
+        "board": board_state_list,
+        "move_history": session.get('move_history', [])
     })
 
 

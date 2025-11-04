@@ -8,11 +8,32 @@
 </head>
 <body>
     <div id="info-panel">
-        <h1>3D Connect Four</h1>
+        <div class="title-container">
+            <h1>3D Connect Four</h1>
+            <button id="settings-btn">⚙️</button>
+        </div>
         <p id="status-message">Click 'New Game' to begin!</p>
         <div id="button-container">
             <button id="new-game-btn">New Game</button>
             <button id="ai-move-btn" disabled>AI Move</button> <!-- ADD THIS BUTTON -->
+        </div>
+    </div>
+    <div id="settings-modal-overlay" class="hidden">
+        <div id="settings-modal">
+            <button id="close-settings-btn">&times;</button>
+            <h2>Settings</h2>
+            <div class="settings-content">
+                <div class="slider-container">
+                    <label for="piece-size-slider">Piece Size</label>
+                    <input type="range" id="piece-size-slider" min="0.5" max="1.3" step="0.05" value="1">
+                    <span id="piece-size-value">1.0</span>
+                </div>
+                <div class="slider-container">
+                    <label for="piece-opacity-slider">Piece Opacity</label>
+                    <input type="range" id="piece-opacity-slider" min="0.0" max="1.0" step="0.05" value="1">
+                    <span id="piece-opacity-value">1.0</span>
+                </div>
+            </div>
         </div>
     </div>
     <div id="move-history-container">

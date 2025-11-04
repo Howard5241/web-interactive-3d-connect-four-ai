@@ -13,6 +13,18 @@ const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new butto
 const LOG_BOX = document.getElementById('log-box');
 const MOVE_HISTORY_BOX = document.getElementById('move-history-box');
 const MOVE_INPUT = document.getElementById('move-input');
+const SETTINGS_BTN = document.getElementById('settings-btn');
+const SETTINGS_MODAL_OVERLAY = document.getElementById('settings-modal-overlay');
+const CLOSE_SETTINGS_BTN = document.getElementById('close-settings-btn');
+const PIECE_SIZE_SLIDER = document.getElementById('piece-size-slider');
+const PIECE_SIZE_VALUE = document.getElementById('piece-size-value');
+const PIECE_OPACITY_SLIDER = document.getElementById('piece-opacity-slider');
+const PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
+
+let gameSettings = {
+    pieceSize: 1.0,
+    pieceOpacity: 1.0
+};
 
 let moveHistory = [];
 let currentMoveIndex = 0;
@@ -55,6 +67,47 @@ function init() {
     renderer.domElement.addEventListener('mousedown', onColumnClick);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
+    
+    // Settings Modal Listeners
+    SETTINGS_BTN.addEventListener('click', () => {
+        SETTINGS_MODAL_OVERLAY.classList.remove('hidden');
+    });
+
+    CLOSE_SETTINGS_BTN.addEventListener('click', () => {
+        SETTINGS_MODAL_OVERLAY.classList.add('hidden');
+    });
+
+    SETTINGS_MODAL_OVERLAY.addEventListener('click', (event) => {
+        if (event.target === SETTINGS_MODAL_OVERLAY) {
+            SETTINGS_MODAL_OVERLAY.classList.add('hidden');
+        }
+    });
+
+    // Settings Sliders
+    PIECE_SIZE_SLIDER.addEventListener('input', (event) => {
+        const newSize = parseFloat(event.target.value);
+        gameSettings.pieceSize = newSize;
+        PIECE_SIZE_VALUE.textContent = newSize.toFixed(1);
+        // We need the current board state to redraw
+        fetch('/api/game_status').then(res => res.json()).then(data => {
+            if (data.board) {
+                updateBoard(data.board);
+            }
+        });
+    });
+
+    PIECE_OPACITY_SLIDER.addEventListener('input', (event) => {
+        const newOpacity = parseFloat(event.target.value);
+        gameSettings.pieceOpacity = newOpacity;
+        PIECE_OPACITY_VALUE.textContent = newOpacity.toFixed(1);
+        // We need the current board state to redraw
+        fetch('/api/game_status').then(res => res.json()).then(data => {
+            if (data.board) {
+                updateBoard(data.board);
+            }
+        });
+    });
+
     window.addEventListener('keydown', handleKeyDown);
     MOVE_INPUT.addEventListener('keydown', handleMoveInputChange);
 
@@ -107,9 +160,23 @@ function updateBoard(boardState) {
     pieces.forEach(p => scene.remove(p));
     pieces = [];
 
-    const pieceGeo = new THREE.SphereGeometry(0.4, 32, 32);
-    const player1Mat = new THREE.MeshStandardMaterial({ color: 0xffdc00, roughness: 0.5 }); // Yellow
-    const player2Mat = new THREE.MeshStandardMaterial({ color: 0xf50000, roughness: 0.5 }); // Red
+    const pieceRadius = 0.4 * gameSettings.pieceSize;
+    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
+    
+    const isTransparent = gameSettings.pieceOpacity < 1.0;
+
+    const player1Mat = new THREE.MeshStandardMaterial({ 
+        color: 0xffdc00, 
+        roughness: 0.5,
+        opacity: gameSettings.pieceOpacity,
+        transparent: isTransparent
+    });
+    const player2Mat = new THREE.MeshStandardMaterial({ 
+        color: 0xf50000, 
+        roughness: 0.5,
+        opacity: gameSettings.pieceOpacity,
+        transparent: isTransparent
+    });
 
     for (let z = 0; z < 4; z++) { // Depth
         for (let y = 0; y < 4; y++) { // Row
@@ -403,6 +470,12 @@ function handleMoveInputChange(event) {
             } else {
                 logMessage('Viewing the new position. Your turn!');
             }
+            // After setting state, update the board with current settings
+            return fetch('/api/state_from_moves/' + statusData.move_history.join(','));
+        })
+        .then(res => res.json())
+        .then(data => {
+            if(data.board) updateBoard(data.board);
         })
         .catch(error => {
             console.error('Error loading from move string:', error);
