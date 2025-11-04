@@ -216,6 +216,35 @@ def game_status():
         "move_history": session.get('move_history', [])
     })
 
+@app.route('/api/preview_move', methods=['POST'])
+def preview_move():
+    """ Calculates the landing position of a move without making it. """
+    data = request.get_json()
+    action = data.get('column')
+
+    board_state_list = session.get('board_state')
+    if board_state_list is None:
+        return jsonify({"error": "Game not started."}), 400
+    
+    state = np.array(board_state_list, dtype=np.int8)
+
+    if action is None or not (0 <= action < game.num_actions):
+        return jsonify({"error": "Invalid action."}), 400
+
+    landing_position = game.get_landing_position(state, action)
+
+    if landing_position is None:
+        return jsonify({"error": "Column is full."}), 400
+
+    player = game.get_current_player(state)
+
+    # Convert numpy types to standard Python types for JSON serialization
+    json_safe_landing_position = [int(coord) for coord in landing_position]
+
+    return jsonify({
+        "landing_position": json_safe_landing_position,
+        "player": int(player)
+    })
 
 @app.route('/api/state_from_moves/', defaults={'moves_string': ''}, methods=['GET'])
 @app.route('/api/state_from_moves/<string:moves_string>', methods=['GET'])

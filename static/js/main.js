@@ -5,8 +5,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 let scene, camera, renderer, controls;
 let clickTargets = []; // Invisible planes for detecting clicks
 let pieces = []; // To hold the visible game pieces
+let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
-
+let player1Color = 0xffdc00; // Yellow
+let player2Color = 0xf50000; // Red
 const STATUS_MSG = document.getElementById('status-message');
 const NEW_GAME_BTN = document.getElementById('new-game-btn');
 const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new button
@@ -65,6 +67,7 @@ function init() {
     // Event Listeners
     window.addEventListener('resize', onWindowResize);
     renderer.domElement.addEventListener('mousedown', onColumnClick);
+    renderer.domElement.addEventListener('mousemove', onMouseMove);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
     
@@ -160,19 +163,25 @@ function updateBoard(boardState) {
     pieces.forEach(p => scene.remove(p));
     pieces = [];
 
+    // Also remove the preview piece when the board updates
+    if (previewPiece) {
+        scene.remove(previewPiece);
+        previewPiece = null;
+    }
+
     const pieceRadius = 0.4 * gameSettings.pieceSize;
     const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
     
     const isTransparent = gameSettings.pieceOpacity < 1.0;
 
     const player1Mat = new THREE.MeshStandardMaterial({ 
-        color: 0xffdc00, 
+        color: player1Color, 
         roughness: 0.5,
         opacity: gameSettings.pieceOpacity,
         transparent: isTransparent
     });
     const player2Mat = new THREE.MeshStandardMaterial({ 
-        color: 0xf50000, 
+        color: player2Color, 
         roughness: 0.5,
         opacity: gameSettings.pieceOpacity,
         transparent: isTransparent
@@ -510,6 +519,12 @@ function onWindowResize() {
 function onColumnClick(event) {
     if (isRequestInProgress) return;
 
+    // Hide preview piece on click
+    if (previewPiece) {
+        scene.remove(previewPiece);
+        previewPiece = null;
+    }
+
     const mouse = new THREE.Vector2();
     mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
     mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -522,6 +537,68 @@ function onColumnClick(event) {
     if (intersects.length > 0) {
         const clickedColumn = intersects[0].object.userData.column;
         handlePlayerMove(clickedColumn);
+    }
+}
+
+function onMouseMove(event) {
+    if (isRequestInProgress) return;
+
+    const mouse = new THREE.Vector2();
+    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+    const raycaster = new THREE.Raycaster();
+    raycaster.setFromCamera(mouse, camera);
+
+    const intersects = raycaster.intersectObjects(clickTargets);
+
+    if (intersects.length > 0) {
+        const hoveredColumn = intersects[0].object.userData.column;
+        showPreview(hoveredColumn);
+    } else {
+        if (previewPiece) {
+            scene.remove(previewPiece);
+            previewPiece = null;
+        }
+    }
+}
+
+async function showPreview(column) {
+    try {
+        const response = await fetch('/api/preview_move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ column: column }),
+        });
+
+        if (!response.ok) {
+            if (previewPiece) {
+                scene.remove(previewPiece);
+                previewPiece = null;
+            }
+            return;
+        }
+
+        const data = await response.json();
+        const { landing_position, player } = data;
+        const [depth, row, col] = landing_position;
+
+        if (previewPiece) {
+            scene.remove(previewPiece);
+        }
+
+        const pieceRadius = 0.4 * gameSettings.pieceSize;
+        const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
+        const material = player === 1 
+            ? new THREE.MeshStandardMaterial({ color: player1Color, roughness: 0.5, opacity: 0.5, transparent: true })
+            : new THREE.MeshStandardMaterial({ color: player2Color, roughness: 0.5, opacity: 0.5, transparent: true });
+
+        previewPiece = new THREE.Mesh(pieceGeo, material);
+        previewPiece.position.set(col, 3 - depth, row);
+        scene.add(previewPiece);
+
+    } catch (error) {
+        console.error('Error showing preview:', error);
     }
 }
 

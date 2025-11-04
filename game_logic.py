@@ -1,4 +1,3 @@
-
 import collections
 from tqdm.notebook import trange, tqdm
 import numpy as np
@@ -165,6 +164,24 @@ class ConnectFour3D():
                 break # Stop if the game is over
         return state, applied_moves
     
+    def get_landing_position(self, state: np.ndarray, action: int) -> tuple[int, int, int] | None:
+        """
+        Calculates the landing position (depth, row, col) for a given action.
+        Returns None if the column is full.
+        """
+        if not (0 <= action < self.num_actions) or self.get_valid_moves(state)[action] == 0:
+            return None
+        
+        row, col = self._action_to_coords(action)
+        
+        try:
+            # Find the deepest index in the column that is empty (0)
+            depth = np.max(np.where(state[:, row, col] == 0))
+            return (depth, row, col)
+        except ValueError:
+            # This occurs if np.where returns an empty array (column is full)
+            return None
+
     def get_symmetries(self, state: np.ndarray, policy: np.ndarray) -> list[tuple[np.ndarray, np.ndarray]]:
         """
         Generates symmetrical versions of a state and its corresponding policy.
