@@ -12,6 +12,10 @@ Welcome to the ultimate 3D Connect Four experience! This project brings the clas
 *   **Stunning 3D Gameplay:** Play Connect Four on a fully rendered 4x4x4 grid.
 *   **Powerful AI Opponent:** Challenge an AI powered by a PyTorch ResNet model and a Monte Carlo Tree Search (MCTS) algorithm.
 *   **Interactive Camera Controls:** Rotate, pan, and zoom around the board to view the game from any angle.
+*   **Live Move Preview:** See exactly where your piece will land with a semi-transparent preview that appears as you hover over each column.
+*   **Customizable Visuals:** Use the settings menu to adjust the size and opacity of the game pieces to your liking.
+*   **Full Move History Navigation:** Step backward and forward through the game's move history using the arrow keys to review the entire match.
+*   **Load Game State:** Instantly jump to any board position by pasting a sequence of moves into the move history input box.
 *   **Responsive UI:** Your moves appear instantly on the board, providing a smooth and satisfying user experience.
 *   **Web-Based:** No installation required for players! Just open a URL and start playing.
 
@@ -20,7 +24,6 @@ Welcome to the ultimate 3D Connect Four experience! This project brings the clas
 ## 🛠️ Tech Stack
 
 This project is a full-stack application combining a powerful backend for AI computation with a modern frontend for 3D visualization.
-
 | Component | Technology                                                              | Description                                                      |
 | :-------- | :---------------------------------------------------------------------- | :--------------------------------------------------------------- |
 | 🧠 **Backend**  | **Python 3** with **Flask**                                             | Serves the web application and provides a REST API for gameplay. |
@@ -45,18 +48,21 @@ The Flask server is the core of the application, responsible for:
     *   `POST /api/new_game`: Clears the session and creates a fresh 4x4x4 board.
     *   `POST /api/player_move`: Receives the player's move, validates it, updates the board, and **immediately returns the new state**. This ensures the player's piece appears instantly.
     *   `POST /api/ai_move`: Triggers the MCTS algorithm to compute the AI's best move based on the current board state and returns the final state.
+    *   `POST /api/preview_move`: Calculates the landing spot for a potential move without actually playing it, enabling the hover preview feature.
+    *   `GET /api/state_from_moves/<moves>`: Generates a board state from a list of moves, used for history navigation and loading positions.
 
 ### 2. The Frontend (The Experience ✨)
 
 The frontend is a single-page application that handles all visuals and user input:
 *   **3D Rendering:** `Three.js` is used to create the scene, including the 3D grid and the game pieces (spheres).
 *   **Camera Controls:** The `OrbitControls` addon allows the user to intuitively drag to rotate, right-drag to pan, and scroll to zoom.
-*   **User Input:** A `Raycaster` detects which column the user clicks on by intersecting with invisible planes placed above the board.
-*   **Responsive Game Flow:** To prevent laggy UI, the frontend uses a **two-call API strategy**:
-    1.  When the user clicks a column, it first calls `/api/player_move`.
+*   **User Input:** A `Raycaster` detects which column the user clicks on or hovers over.
+*   **Settings Modal:** A pop-up window allows the user to customize the piece size and opacity in real-time.
+*   **Responsive Game Flow:** The game flow is designed to be interactive and give the user control.
+    1.  When the user clicks a column, the frontend calls `/api/player_move`.
     2.  The UI is instantly updated with the player's new piece.
-    3.  A "thinking" message is displayed, and a second call is made to `/api/ai_move`.
-    4.  When the AI responds, the UI is updated again with the AI's piece.
+    3.  The game then waits for the user's next action. The user can click the "AI Move" button to have the AI play its turn.
+    4.  When the AI move is requested, a "thinking" message is displayed while the backend computes the move. The board is updated upon completion.
 
 ---
 
