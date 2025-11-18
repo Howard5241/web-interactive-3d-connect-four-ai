@@ -1,8 +1,11 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { ConnectFour3D } from './gameLogic.js';
 
 // --- GLOBAL VARIABLES ---
 let scene, camera, renderer, controls;
+let game; // Game logic instance
+let boardState; // Current state of the board
 let clickTargets = []; // Invisible planes for detecting clicks
 let pieces = []; // To hold the visible game pieces
 let previewPiece = null; // To hold the semi-transparent preview piece
@@ -15,6 +18,7 @@ const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new butto
 const LOG_BOX = document.getElementById('log-box');
 const MOVE_HISTORY_BOX = document.getElementById('move-history-box');
 const MOVE_INPUT = document.getElementById('move-input');
+const COPY_HEX_BTN = document.getElementById('copy-hex-btn');
 const SETTINGS_BTN = document.getElementById('settings-btn');
 const SETTINGS_MODAL_OVERLAY = document.getElementById('settings-modal-overlay');
 const CLOSE_SETTINGS_BTN = document.getElementById('close-settings-btn');
@@ -34,6 +38,10 @@ let currentMoveIndex = 0;
 // --- INITIALIZATION ---
 
 function init() {
+    // Game Logic
+    game = new ConnectFour3D();
+    boardState = game.getInitialState();
+
     // Scene
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x1a1a1a);
@@ -70,6 +78,7 @@ function init() {
     renderer.domElement.addEventListener('mousemove', onMouseMove);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
+    COPY_HEX_BTN.addEventListener('click', copyHexCode);
     
     // Settings Modal Listeners
     SETTINGS_BTN.addEventListener('click', () => {
@@ -243,19 +252,54 @@ function setButtonsDisabled(state) {
     AI_MOVE_BTN.disabled = state;
 }
 
+function checkGameOver(terminalMessage = null, nonTerminalMessage = null) {
+    const [value, isTerminal] = game.getValueAndTerminated(boardState);
+
+    if (!isTerminal) {
+        if (nonTerminalMessage) {
+            logMessage(nonTerminalMessage);
+            setButtonsDisabled(false);
+        }
+        return false; // Game is not over
+    }
+    // If a custom message is provided, use it. Otherwise, determine the winner.
+    
+    if (value === 0) // Draw
+        logMessage("It's a draw!");
+     else { // A win occurred
+        if (terminalMessage) {
+            logMessage(terminalMessage);
+        }else{
+            const winnerPlayer = game.getCurrentPlayer(boardState) === 1 ? "Player 2" : "Player 1";
+            logMessage(winnerPlayer + " wins!");
+        }
+    }
+    // When the game is over, disable moves and allow a new game to be started.
+    setButtonsDisabled(true);
+    NEW_GAME_BTN.disabled = false;
+    
+    return true; // Game is over
+}
+
 async function startNewGame() {
     logMessage('Starting new game...');
     setButtonsDisabled(true);
     isRequestInProgress = true;
 
     try {
+        // Reset server state for AI
         const response = await fetch('/api/new_game', { method: 'POST' });
         if (!response.ok) throw new Error('Network response was not ok');
-        const data = await response.json();
-        updateBoard(data.board);
+        
+        // Reset local state
+        boardState = game.getInitialState();
+        moveHistory = [];
         currentMoveIndex = 0;
-        updateMoveHistory(data.move_history);
+        
+        updateBoard(boardState);
+        updateMoveHistory(moveHistory);
         logMessage('Your turn! Click a column or let the AI play.');
+
     } catch (error) {
         console.error('Error starting new game:', error);
         logMessage('Error: Could not start new game.');
@@ -272,55 +316,31 @@ async function handlePlayerMove(column) {
         return;
     }
 
-    isRequestInProgress = true;
-    // If the current board state indicates game over, do not proceed
-    const gameStatusResponse = await fetch('/api/game_status');
-    const gameStatus = await gameStatusResponse.json();
-    if (gameStatus.status === 'Game Over') {
+    const [_, isTerminalBeforeMove] = game.getValueAndTerminated(boardState);
+    if (isTerminalBeforeMove) {
         logMessage('Game is over. Please start a new game.');
-        isRequestInProgress = false;
         return;
     }
+
+    const validMoves = game.getValidMoves(boardState);
+    if (validMoves[column] === 0) {
+        logMessage('Invalid move: Column is full.');
+        return;
+    }
+
     setButtonsDisabled(true);
     logMessage('Processing your move...');
 
-    try {
-        const response = await fetch('/api/player_move', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ column: column }),
-        });
+    // Apply move locally
+    boardState = game.getNextState(boardState, column);
+    moveHistory.push(column);
+    currentMoveIndex++;
 
-        if (!response.ok) {
-            const errorData = await response.json();
-            throw new Error(errorData.error || 'Invalid move or server error.');
-        }
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
 
-        const data = await response.json();
-        updateBoard(data.board);
-        currentMoveIndex = data.move_history.length;
-        updateMoveHistory(data.move_history);
-
-        if (data.status === 'Game Over') {
-            if (data.winner === 'Draw') {
-                logMessage('It\'s a draw!');
-            } else {
-                logMessage('Congratulations, you win! 🎉');
-            }
-            AI_MOVE_BTN.disabled = true; // Game is over, disable AI move
-            NEW_GAME_BTN.disabled = false; // Enable new game button
-        } else {
-            logMessage('Your turn! Click a column or let the AI play.');
-            setButtonsDisabled(false); // Re-enable for next move
-        }
-
-    } catch (error) {
-        console.error('Error during player move:', error);
-        logMessage(`Error: ${error.message}`);
-        setButtonsDisabled(false); // Re-enable on error
-    } finally {
-        isRequestInProgress = false;
-    }
+    // Check for game over locally
+    checkGameOver('You win!', 'Your turn! Click a column or let the AI play.');
 }
 
 // New function to handle the AI move request
@@ -328,6 +348,12 @@ async function requestAIMove() {
     if (isRequestInProgress) return;
     if (currentMoveIndex !== moveHistory.length) {
         logMessage('You must be at the most recent move to play.');
+        return;
+    }
+
+    const [__, isTerminal] = game.getValueAndTerminated(boardState);
+    if (isTerminal) {
+        logMessage('Game is over. Cannot make an AI move.');
         return;
     }
 
@@ -339,24 +365,30 @@ async function requestAIMove() {
         // Add a small delay for better UX
         await new Promise(resolve => setTimeout(resolve, 500)); 
         
+        // We need to make sure the server has the latest state before asking for an AI move.
+        await fetch('/api/set_state', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                board_state: boardState,
+                move_history: moveHistory
+            }),
+        });
+
         const response = await fetch('/api/ai_move', { method: 'POST' });
         if (!response.ok) throw new Error('AI server error.');
         
         const data = await response.json();
-        updateBoard(data.board);
-        currentMoveIndex = data.move_history.length;
-        updateMoveHistory(data.move_history);
+        
+        // The server returns the new state, so we update our local state
+        boardState = data.board;
+        moveHistory = data.move_history;
+        currentMoveIndex = moveHistory.length;
 
-        if (data.status === 'Game Over') {
-            if (data.winner === 'Draw') {
-                logMessage('It\'s a draw!');
-            } else {
-                logMessage('AI wins! Better luck next time. 🤖');
-            }
-            AI_MOVE_BTN.disabled = true; // Game is over
-            NEW_GAME_BTN.disabled = false; // Enable new game button
-        } else {
-            logMessage('Your turn! Click a column or let the AI play.');
+        updateBoard(boardState);
+        updateMoveHistory(moveHistory);
+
+        if (!checkGameOver('AI wins!', 'Your turn! Click a column or let the AI play.')) {
             setButtonsDisabled(false); // Re-enable for next move
         }
 
@@ -379,36 +411,20 @@ async function navigateHistory(direction) {
     currentMoveIndex = newIndex;
     const isViewingLive = currentMoveIndex === moveHistory.length;
 
-    setButtonsDisabled(true); // Disable buttons during navigation
-    isRequestInProgress = true;
-
     const movesToDisplay = moveHistory.slice(0, currentMoveIndex);
-    const movesString = movesToDisplay.join(',');
+    
+    // Generate state locally
+    const { state } = game.getStateFromMoves(movesToDisplay);
+    boardState = state;
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory); // Redraw to update highlighting
 
-    try {
-        const response = await fetch(`/api/state_from_moves/${movesString}`);
-        if (!response.ok) throw new Error('Failed to fetch historical state.');
-        
-        const data = await response.json();
-        updateBoard(data.board);
-        updateMoveHistory(moveHistory); // Redraw to update highlighting
-
-        if (isViewingLive) {
-            logMessage('Viewing the most recent move. Your turn!');
-            setButtonsDisabled(false); // Re-enable buttons
-        } else {
-            logMessage(`Viewing move ${currentMoveIndex} of ${moveHistory.length}.`);
-        }
-
-    } catch (error) {
-        console.error('Error navigating history:', error);
-        logMessage('Error: Could not load position.');
-    } finally {
-        // Only re-enable buttons if we are back at the live position
-        if (currentMoveIndex === moveHistory.length) {
-            setButtonsDisabled(false);
-        }
-        isRequestInProgress = false;
+    if (isViewingLive) {
+        logMessage('Viewing the most recent move. Your turn!');
+        setButtonsDisabled(false);
+    } else {
+        logMessage(`Viewing move ${currentMoveIndex} of ${moveHistory.length}.`);
+        setButtonsDisabled(true);
     }
 }
 
@@ -424,8 +440,7 @@ function handleMoveInputChange(event) {
         return; // Do nothing if input is empty
     }
 
-    // Convert space-separated numbers to a comma-separated string for the API
-    const movesForApi = movesString.split(/\s+/).join(',');
+    const moves = movesString.split(/\s+/).map(Number);
 
     // Immediately clear the input and show loading state
     MOVE_INPUT.value = '';
@@ -433,67 +448,41 @@ function handleMoveInputChange(event) {
     setButtonsDisabled(true);
     isRequestInProgress = true;
 
-    let newBoardState;
-    let appliedMoves;
+    // Generate state locally
+    const { state, appliedMoves } = game.getStateFromMoves(moves);
+    
+    if (appliedMoves.length < moves.length) {
+        logMessage(`Warning: Invalid move found. Displaying state before invalid move.`);
+    }
 
-    // Step 1: Get the state from the moves string
-    fetch(`/api/state_from_moves/${movesForApi}`)
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to fetch state from moves.');
-            return response.json();
-        })
-        .then(data => {
-            if (data.error) {
-                logMessage(`Warning: ${data.error}`);
-            }
-            newBoardState = data.board;
-            appliedMoves = data.moves_applied;
+    boardState = state;
+    moveHistory = appliedMoves;
+    currentMoveIndex = appliedMoves.length;
 
-            // Step 2: Set the new state on the server's session
-            return fetch('/api/set_state', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    board_state: newBoardState,
-                    move_history: appliedMoves
-                }),
-            });
-        })
-        .then(response => {
-            if (!response.ok) throw new Error('Failed to set the new state on the server.');
-            
-            // Step 3: Update the UI now that the server state is synced
-            logMessage('Board updated to the specified position.');
-            updateBoard(newBoardState);
-            currentMoveIndex = appliedMoves.length;
-            updateMoveHistory(appliedMoves);
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
 
-            // Step 4: Check the status of the new board state
-            return fetch('/api/game_status');
-        })
-        .then(response => response.json())
-        .then(statusData => {
-            if (statusData.status === 'Game Over') {
-                logMessage(`Game is over. Winner: ${statusData.winner}`);
-                AI_MOVE_BTN.disabled = true;
-            } else {
-                logMessage('Viewing the new position. Your turn!');
-            }
-            // After setting state, update the board with current settings
-            return fetch('/api/state_from_moves/' + statusData.move_history.join(','));
-        })
-        .then(res => res.json())
-        .then(data => {
-            if(data.board) updateBoard(data.board);
-        })
-        .catch(error => {
-            console.error('Error loading from move string:', error);
-            logMessage(`Error: ${error.message}`);
-        })
-        .finally(() => {
-            setButtonsDisabled(false);
-            isRequestInProgress = false;
-        });
+    // Sync the new state with the server for the AI
+    fetch('/api/set_state', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            board_state: boardState,
+            move_history: moveHistory
+        }),
+    })
+    .then(response => {
+        if (!response.ok) throw new Error('Failed to set the new state on the server.');
+        checkGameOver(null, `Viewing the new position. Your turn!`)
+    })
+    .catch(error => {
+        console.error('Error loading from move string:', error);
+        logMessage(`Error: ${error.message}`);
+    })
+    .finally(() => {
+        setButtonsDisabled(false);
+        isRequestInProgress = false;
+    });
 }
 
 function handleKeyDown(event) {
@@ -564,42 +553,33 @@ function onMouseMove(event) {
 }
 
 async function showPreview(column) {
-    try {
-        const response = await fetch('/api/preview_move', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ column: column }),
-        });
+    // Calculate preview locally
+    const landingPosition = game.getLandingPosition(boardState, column);
 
-        if (!response.ok) {
-            if (previewPiece) {
-                scene.remove(previewPiece);
-                previewPiece = null;
-            }
-            return;
-        }
-
-        const data = await response.json();
-        const { landing_position, player } = data;
-        const [depth, row, col] = landing_position;
-
+    if (!landingPosition) {
         if (previewPiece) {
             scene.remove(previewPiece);
+            previewPiece = null;
         }
-
-        const pieceRadius = 0.4 * gameSettings.pieceSize;
-        const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
-        const material = player === 1 
-            ? new THREE.MeshStandardMaterial({ color: player1Color, roughness: 0.5, opacity: 0.5, transparent: true })
-            : new THREE.MeshStandardMaterial({ color: player2Color, roughness: 0.5, opacity: 0.5, transparent: true });
-
-        previewPiece = new THREE.Mesh(pieceGeo, material);
-        previewPiece.position.set(col, 3 - depth, row);
-        scene.add(previewPiece);
-
-    } catch (error) {
-        console.error('Error showing preview:', error);
+        return;
     }
+
+    const player = game.getCurrentPlayer(boardState);
+    const [depth, row, col] = landingPosition;
+
+    if (previewPiece) {
+        scene.remove(previewPiece);
+    }
+
+    const pieceRadius = 0.4 * gameSettings.pieceSize;
+    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
+    const material = player === 1 
+        ? new THREE.MeshStandardMaterial({ color: player1Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true })
+        : new THREE.MeshStandardMaterial({ color: player2Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true });
+
+    previewPiece = new THREE.Mesh(pieceGeo, material);
+    previewPiece.position.set(col, 3 - depth, row);
+    scene.add(previewPiece);
 }
 
 function animate() {

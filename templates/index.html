@@ -37,7 +37,10 @@
         </div>
     </div>
     <div id="move-history-container">
-        <h2>Move History</h2>
+        <div class="history-header">
+            <h2>Move History</h2>
+            <button id="copy-hex-btn" title="Copy State Hex">📋</button>
+        </div>
         <div id="move-history-box"></div>
         <input type="text" id="move-input" placeholder="e.g., 1 3 12 15">
     </div>
@@ -58,6 +61,7 @@
     </script>
 
     <!-- Our main game script -->
+    <script type="module" src="{{ url_for('static', filename='js/gameLogic.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

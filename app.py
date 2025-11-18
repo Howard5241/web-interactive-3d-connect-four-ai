@@ -186,11 +186,12 @@ def game_status():
     board_state_list = session.get('board_state')
     if board_state_list is None:
         # If there's no board in the session, the game hasn't started.
-        return jsonify({
-            "status": "Not Started",
-            "winner": None
-        })
-    
+        # We can create a new one to be safe.
+        initial_state = game.get_initial_state()
+        session['board_state'] = initial_state.tolist()
+        session['move_history'] = []
+        board_state_list = initial_state.tolist()
+
     state = np.array(board_state_list, dtype=np.int8)
 
     # Use existing game logic to check for termination and winner
@@ -204,7 +205,7 @@ def game_status():
         status = "Game Over"
         if value == -1:  # A win occurred for the last player
             # The winner is the player who is NOT the current player.
-            winner_player_id = -game.get_current_player(state)
+            winner_player_id = game.get_current_player(state) * -1
             winner = "Player 1" if winner_player_id == 1 else "Player 2"
         else:  # A draw
             winner = "Draw"
@@ -215,61 +216,6 @@ def game_status():
         "board": board_state_list,
         "move_history": session.get('move_history', [])
     })
-
-@app.route('/api/preview_move', methods=['POST'])
-def preview_move():
-    """ Calculates the landing position of a move without making it. """
-    data = request.get_json()
-    action = data.get('column')
-
-    board_state_list = session.get('board_state')
-    if board_state_list is None:
-        return jsonify({"error": "Game not started."}), 400
-    
-    state = np.array(board_state_list, dtype=np.int8)
-
-    if action is None or not (0 <= action < game.num_actions):
-        return jsonify({"error": "Invalid action."}), 400
-
-    landing_position = game.get_landing_position(state, action)
-
-    if landing_position is None:
-        return jsonify({"error": "Column is full."}), 400
-
-    player = game.get_current_player(state)
-
-    # Convert numpy types to standard Python types for JSON serialization
-    json_safe_landing_position = [int(coord) for coord in landing_position]
-
-    return jsonify({
-        "landing_position": json_safe_landing_position,
-        "player": int(player)
-    })
-
-@app.route('/api/state_from_moves/', defaults={'moves_string': ''}, methods=['GET'])
-@app.route('/api/state_from_moves/<string:moves_string>', methods=['GET'])
-def get_state_from_moves(moves_string):
-    """
-    Calculates and returns a board state from a comma-separated string of moves.
-    This now handles both empty and populated move strings.
-    """
-    try:
-        moves = [int(move) for move in moves_string.split(',')] if moves_string else []
-    except ValueError:
-        return jsonify({"error": "Invalid move string. Moves must be comma-separated integers."}), 400
-
-    state, applied_moves = game.get_state_from_moves(moves)
-    
-    response = {
-        "board": state.tolist(),
-        "moves_applied": applied_moves
-    }
-    
-    if len(applied_moves) < len(moves):
-        response["error"] = f"Invalid move '{moves[len(applied_moves)]}' for the board state. Displaying state before this move."
-        return jsonify(response), 400
-
-    return jsonify(response)
 
 
 # --- 4. RUN THE APP ---

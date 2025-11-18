@@ -158,6 +158,30 @@ h1 {
     color: #ffa500;
 }
 
+.history-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.history-header h2 {
+    margin: 0;
+}
+
+#copy-hex-btn {
+    background: none;
+    border: none;
+    color: #ffa500;
+    font-size: 1.4em;
+    cursor: pointer;
+    padding: 0;
+}
+
+#copy-hex-btn:hover {
+    color: #ffc14d;
+}
+
 #move-input {
     width: 100%;
     box-sizing: border-box;
@@ -175,6 +199,7 @@ h1 {
     overflow-y: auto;
     display: flex;
     flex-wrap: wrap;
+    align-content: flex-start; /* Justify content to the top */
     gap: 5px;
     padding: 5px;
     background-color: rgba(26, 26, 26, 0.8);

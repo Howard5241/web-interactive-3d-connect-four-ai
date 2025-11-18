@@ -46,10 +46,10 @@ The Flask server is the core of the application, responsible for:
 *   **Session Management:** It uses Flask sessions to keep track of the board state for each individual user, allowing multiple people to play simultaneously without interfering with each other.
 *   **API Endpoints:** It exposes a simple REST API:
     *   `POST /api/new_game`: Clears the session and creates a fresh 4x4x4 board.
-    *   `POST /api/player_move`: Receives the player's move, validates it, updates the board, and **immediately returns the new state**. This ensures the player's piece appears instantly.
+    *   `POST /api/player_move`: Receives the player's move, validates it, updates the board, and returns the new state.
     *   `POST /api/ai_move`: Triggers the MCTS algorithm to compute the AI's best move based on the current board state and returns the final state.
-    *   `POST /api/preview_move`: Calculates the landing spot for a potential move without actually playing it, enabling the hover preview feature.
-    *   `GET /api/state_from_moves/<moves>`: Generates a board state from a list of moves, used for history navigation and loading positions.
+    *   `POST /api/set_state`: Explicitly sets the board state and move history, used to sync the frontend with the backend.
+    *   `GET /api/game_status`: Returns the current board, move history, and game status (ongoing, win, draw).
 
 ### 2. The Frontend (The Experience ✨)
 
@@ -59,10 +59,10 @@ The frontend is a single-page application that handles all visuals and user inpu
 *   **User Input:** A `Raycaster` detects which column the user clicks on or hovers over.
 *   **Settings Modal:** A pop-up window allows the user to customize the piece size and opacity in real-time.
 *   **Responsive Game Flow:** The game flow is designed to be interactive and give the user control.
-    1.  When the user clicks a column, the frontend calls `/api/player_move`.
-    2.  The UI is instantly updated with the player's new piece.
-    3.  The game then waits for the user's next action. The user can click the "AI Move" button to have the AI play its turn.
-    4.  When the AI move is requested, a "thinking" message is displayed while the backend computes the move. The board is updated upon completion.
+    1.  When the user clicks a column, the frontend updates the board state **locally** for an instant response.
+    2.  The game then waits for the user's next action. The user can click the "AI Move" button to have the AI play its turn.
+    3.  When the AI move is requested, the frontend first syncs its local state with the server.
+    4.  A "thinking" message is displayed while the backend computes the move. The board is updated upon completion.
 
 ---
 
