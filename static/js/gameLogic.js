@@ -118,8 +118,8 @@ export class ConnectFour3D {
     }
 
     getStateHexCode(state) {
-        const player1Bitboard = this._createBitboard(state, 1);
-        const player2Bitboard = this._createBitboard(state, -1);
+        const player1Bitboard = this._createBitboardFlipped(state, 1);
+        const player2Bitboard = this._createBitboardFlipped(state, -1);
         const p1Hex = player1Bitboard.toString(16).padStart(16, '0');
         const p2Hex = player2Bitboard.toString(16).padStart(16, '0');
         return `${p1Hex} ${p2Hex}`;
@@ -170,6 +170,20 @@ export class ConnectFour3D {
                 for (let x = 0; x < this.cols; x++) {
                     if (state[z][y][x] === player) {
                         const pos = BigInt(z * this.numColumns + y * this.cols + x);
+                        bitboard |= (1n << pos);
+                    }
+                }
+            }
+        }
+        return bitboard;
+    }
+    _createBitboardFlipped(state, player) {
+        let bitboard = 0n;
+        for (let z = 0; z < this.depth; z++) {
+            for (let y = 0; y < this.rows; y++) {
+                for (let x = 0; x < this.cols; x++) {
+                    if (state[z][y][x] === player) {
+                        const pos = BigInt((3-z) * this.numColumns + y * this.cols + x);
                         bitboard |= (1n << pos);
                     }
                 }

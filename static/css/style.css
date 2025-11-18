@@ -169,7 +169,12 @@ h1 {
     margin: 0;
 }
 
-#copy-hex-btn {
+.history-header div {
+    display: flex;
+    gap: 8px;
+}
+
+#copy-hex-btn, #copy-moves-btn {
     background: none;
     border: none;
     color: #ffa500;
@@ -178,7 +183,7 @@ h1 {
     padding: 0;
 }
 
-#copy-hex-btn:hover {
+#copy-hex-btn:hover, #copy-moves-btn:hover {
     color: #ffc14d;
 }
 

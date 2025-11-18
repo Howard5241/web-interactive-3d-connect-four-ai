@@ -12,20 +12,11 @@ let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
 let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
-const STATUS_MSG = document.getElementById('status-message');
-const NEW_GAME_BTN = document.getElementById('new-game-btn');
-const AI_MOVE_BTN = document.getElementById('ai-move-btn'); // Get the new button
-const LOG_BOX = document.getElementById('log-box');
-const MOVE_HISTORY_BOX = document.getElementById('move-history-box');
-const MOVE_INPUT = document.getElementById('move-input');
-const COPY_HEX_BTN = document.getElementById('copy-hex-btn');
-const SETTINGS_BTN = document.getElementById('settings-btn');
-const SETTINGS_MODAL_OVERLAY = document.getElementById('settings-modal-overlay');
-const CLOSE_SETTINGS_BTN = document.getElementById('close-settings-btn');
-const PIECE_SIZE_SLIDER = document.getElementById('piece-size-slider');
-const PIECE_SIZE_VALUE = document.getElementById('piece-size-value');
-const PIECE_OPACITY_SLIDER = document.getElementById('piece-opacity-slider');
-const PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
+
+// DOM Elements (will be assigned in init)
+let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN;
+let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
+let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE;
 
 let gameSettings = {
     pieceSize: 1.0,
@@ -38,6 +29,23 @@ let currentMoveIndex = 0;
 // --- INITIALIZATION ---
 
 function init() {
+    // Assign DOM elements
+    STATUS_MSG = document.getElementById('status-message');
+    NEW_GAME_BTN = document.getElementById('new-game-btn');
+    AI_MOVE_BTN = document.getElementById('ai-move-btn');
+    LOG_BOX = document.getElementById('log-box');
+    MOVE_HISTORY_BOX = document.getElementById('move-history-box');
+    MOVE_INPUT = document.getElementById('move-input');
+    COPY_HEX_BTN = document.getElementById('copy-hex-btn');
+    COPY_MOVES_BTN = document.getElementById('copy-moves-btn');
+    SETTINGS_BTN = document.getElementById('settings-btn');
+    SETTINGS_MODAL_OVERLAY = document.getElementById('settings-modal-overlay');
+    CLOSE_SETTINGS_BTN = document.getElementById('close-settings-btn');
+    PIECE_SIZE_SLIDER = document.getElementById('piece-size-slider');
+    PIECE_SIZE_VALUE = document.getElementById('piece-size-value');
+    PIECE_OPACITY_SLIDER = document.getElementById('piece-opacity-slider');
+    PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
+
     // Game Logic
     game = new ConnectFour3D();
     boardState = game.getInitialState();
@@ -79,6 +87,9 @@ function init() {
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
     COPY_HEX_BTN.addEventListener('click', copyHexCode);
+    COPY_MOVES_BTN.addEventListener('click', copyMoveHistory)
+    
+    
     
     // Settings Modal Listeners
     SETTINGS_BTN.addEventListener('click', () => {
@@ -125,6 +136,40 @@ function init() {
 
     // Start Animation Loop
     animate();
+}
+
+async function copyMoveHistory() {
+    const movesString = moveHistory.slice(0, currentMoveIndex).join(' ');
+    try {
+        await navigator.clipboard.writeText(movesString);
+        logMessage(`Copied moves to clipboard: ${movesString}`);
+        // Optional: Visual feedback
+        const originalText = COPY_MOVES_BTN.textContent;
+        COPY_MOVES_BTN.textContent = '✅';
+        setTimeout(() => {
+            COPY_MOVES_BTN.textContent = '📝';
+        }, 1500);
+    } catch (err) {
+        console.error('Failed to copy moves: ', err);
+        logMessage('Error: Could not copy moves.');
+    }
+}
+
+async function copyHexCode() {
+    const hexCode = game.getStateHexCode(boardState);
+    try {
+        await navigator.clipboard.writeText(hexCode);
+        logMessage(`Copied hex to clipboard: ${hexCode}`);
+        // Optional: Visual feedback
+        const originalText = COPY_HEX_BTN.textContent;
+        COPY_HEX_BTN.textContent = '✅';
+        setTimeout(() => {
+            COPY_HEX_BTN.textContent = '📋';
+        }, 1500);
+    } catch (err) {
+        console.error('Failed to copy hex code: ', err);
+        logMessage('Error: Could not copy hex code.');
+    }
 }
 
 // --- 3D BOARD DRAWING --- (No changes in this section)
