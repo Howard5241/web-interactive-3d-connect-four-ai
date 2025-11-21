@@ -61,7 +61,7 @@ h1 {
     gap: 10px; /* Adds space between buttons */
 }
 
-#new-game-btn, #ai-move-btn { /* Style both buttons together */
+#new-game-btn, #ai-move-btn, #minimax-move-btn { /* Style all buttons together */
     padding: 10px 20px;
     font-size: 1em;
     cursor: pointer;
@@ -73,12 +73,12 @@ h1 {
     transition: background-color 0.2s, opacity 0.2s;
 }
 
-#new-game-btn:hover, #ai-move-btn:hover:not(:disabled) {
+#new-game-btn:hover, #ai-move-btn:hover:not(:disabled), #minimax-move-btn:hover:not(:disabled) {
     background-color: #ffc14d;
 }
 
 /* Style for when buttons are disabled */
-#new-game-btn:disabled, #ai-move-btn:disabled {
+#new-game-btn:disabled, #ai-move-btn:disabled, #minimax-move-btn:disabled {
     background-color: #888;
     color: #ccc;
     cursor: not-allowed;

@@ -14,7 +14,7 @@ let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
 
 // DOM Elements (will be assigned in init)
-let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN;
+let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
 let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE;
 
@@ -33,6 +33,7 @@ function init() {
     STATUS_MSG = document.getElementById('status-message');
     NEW_GAME_BTN = document.getElementById('new-game-btn');
     AI_MOVE_BTN = document.getElementById('ai-move-btn');
+    MINIMAX_MOVE_BTN = document.getElementById('minimax-move-btn');
     LOG_BOX = document.getElementById('log-box');
     MOVE_HISTORY_BOX = document.getElementById('move-history-box');
     MOVE_INPUT = document.getElementById('move-input');
@@ -86,6 +87,7 @@ function init() {
     renderer.domElement.addEventListener('mousemove', onMouseMove);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
+    MINIMAX_MOVE_BTN.addEventListener('click', requestMinimaxMove);
     COPY_HEX_BTN.addEventListener('click', copyHexCode);
     COPY_MOVES_BTN.addEventListener('click', copyMoveHistory)
     
@@ -111,12 +113,7 @@ function init() {
         const newSize = parseFloat(event.target.value);
         gameSettings.pieceSize = newSize;
         PIECE_SIZE_VALUE.textContent = newSize.toFixed(1);
-        // We need the current board state to redraw
-        fetch('/api/game_status').then(res => res.json()).then(data => {
-            if (data.board) {
-                updateBoard(data.board);
-            }
-        });
+        updateBoard(boardState);
     });
 
     PIECE_OPACITY_SLIDER.addEventListener('input', (event) => {
@@ -295,6 +292,7 @@ function logMessage(message) {
 function setButtonsDisabled(state) {
     NEW_GAME_BTN.disabled = state;
     AI_MOVE_BTN.disabled = state;
+    MINIMAX_MOVE_BTN.disabled = state;
 }
 
 function checkGameOver(terminalMessage = null, nonTerminalMessage = null) {
@@ -446,6 +444,60 @@ async function requestAIMove() {
     }
 }
 
+// New function to handle the minimax move request
+async function requestMinimaxMove() {
+    if (isRequestInProgress) return;
+    if (currentMoveIndex !== moveHistory.length) {
+        logMessage('You must be at the most recent move to play.');
+        return;
+    }
+
+    const [__, isTerminal] = game.getValueAndTerminated(boardState);
+    if (isTerminal) {
+        logMessage('Game is over. Cannot make a minimax move.');
+        return;
+    }
+
+    isRequestInProgress = true;
+    setButtonsDisabled(true);
+    logMessage('Minimax AI is thinking...');
+
+    try {
+        const hexCodes = game.getStateHexCode(boardState).split(' ');
+        const hex_p1 = hexCodes[0];
+        const hex_p2 = hexCodes[1];
+
+        const response = await fetch('/api/minimax_move', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ hex_p1, hex_p2 }),
+        });
+
+        if (!response.ok) throw new Error('Minimax server error.');
+
+        const data = await response.json();
+        const move = data.move;
+
+        boardState = game.getNextState(boardState, move);
+        moveHistory.push(move);
+        currentMoveIndex++;
+
+        updateBoard(boardState);
+        updateMoveHistory(moveHistory);
+
+        if (!checkGameOver('Minimax AI wins!', 'Your turn! Click a column or let the AI play.')) {
+            setButtonsDisabled(false);
+        }
+
+    } catch (error) {
+        console.error('Error during minimax move:', error);
+        logMessage(`Error: ${error.message}`);
+        setButtonsDisabled(false);
+    } finally {
+        isRequestInProgress = false;
+    }
+}
+
 async function navigateHistory(direction) {
     const newIndex = currentMoveIndex + direction;
 
@@ -507,27 +559,10 @@ function handleMoveInputChange(event) {
     updateBoard(boardState);
     updateMoveHistory(moveHistory);
 
-    // Sync the new state with the server for the AI
-    fetch('/api/set_state', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            board_state: boardState,
-            move_history: moveHistory
-        }),
-    })
-    .then(response => {
-        if (!response.ok) throw new Error('Failed to set the new state on the server.');
-        checkGameOver(null, `Viewing the new position. Your turn!`)
-    })
-    .catch(error => {
-        console.error('Error loading from move string:', error);
-        logMessage(`Error: ${error.message}`);
-    })
-    .finally(() => {
-        setButtonsDisabled(false);
-        isRequestInProgress = false;
-    });
+    setButtonsDisabled(false);
+    isRequestInProgress = false;
+
+    
 }
 
 function handleKeyDown(event) {

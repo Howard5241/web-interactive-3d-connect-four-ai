@@ -245,6 +245,36 @@ class ConnectFour3D():
         # Plane 3: Empty Spaces (value 0) - already initialized to 0
         return basic_state
     
+    def get_state_from_hex(self, hex_p1: str, hex_p2: str) -> np.ndarray:
+        """
+        Reconstructs the board state from two 64-bit hex strings,
+        accounting for the flipped z-axis from the JavaScript implementation.
+        """
+        state = self.get_initial_state()
+        
+        p1_bitboard = np.uint64(int(hex_p1, 16))
+        p2_bitboard = np.uint64(int(hex_p2, 16))
+
+        for i in range(self.num_cells):
+            pos = np.uint64(1) << np.uint64(i)
+            
+            if (p1_bitboard & pos):
+                # Reverse the mapping from JS: pos = (3-z)*16 + y*4 + x
+                z_flipped = i // 16
+                z = 3 - z_flipped
+                y = (i % 16) // 4
+                x = i % 4
+                state[z, y, x] = 1
+            
+            if (p2_bitboard & pos):
+                z_flipped = i // 16
+                z = 3 - z_flipped
+                y = (i % 16) // 4
+                x = i % 4
+                state[z, y, x] = -1
+                
+        return state
+
     def _generate_winning_patterns(self) -> np.ndarray:
         """
         Generates all winning patterns as bitmasks for a 4x4x4 cube.
