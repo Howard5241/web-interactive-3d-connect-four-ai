@@ -14,7 +14,7 @@ let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
 
 // DOM Elements (will be assigned in init)
-let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN;
+let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
 let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE;
 
@@ -34,6 +34,7 @@ function init() {
     NEW_GAME_BTN = document.getElementById('new-game-btn');
     AI_MOVE_BTN = document.getElementById('ai-move-btn');
     MINIMAX_MOVE_BTN = document.getElementById('minimax-move-btn');
+    UNDO_BTN = document.getElementById('undo-btn');
     LOG_BOX = document.getElementById('log-box');
     MOVE_HISTORY_BOX = document.getElementById('move-history-box');
     MOVE_INPUT = document.getElementById('move-input');
@@ -88,6 +89,7 @@ function init() {
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
     MINIMAX_MOVE_BTN.addEventListener('click', requestMinimaxMove);
+    UNDO_BTN.addEventListener('click', undoLastMove);
     COPY_HEX_BTN.addEventListener('click', copyHexCode);
     COPY_MOVES_BTN.addEventListener('click', copyMoveHistory)
     
@@ -288,6 +290,7 @@ function setButtonsDisabled(state) {
     NEW_GAME_BTN.disabled = state;
     AI_MOVE_BTN.disabled = state;
     MINIMAX_MOVE_BTN.disabled = state;
+    UNDO_BTN.disabled = state || currentMoveIndex === 0;
 }
 
 function checkGameOver(terminalMessage = null, nonTerminalMessage = null) {
@@ -315,6 +318,7 @@ function checkGameOver(terminalMessage = null, nonTerminalMessage = null) {
     // When the game is over, disable moves and allow a new game to be started.
     setButtonsDisabled(true);
     NEW_GAME_BTN.disabled = false;
+    UNDO_BTN.disabled = true;
     
     return true; // Game is over
 }
@@ -345,6 +349,32 @@ async function startNewGame() {
         setButtonsDisabled(false);
         isRequestInProgress = false;
     }
+}
+
+async function undoLastMove() {
+    if (isRequestInProgress) return;
+    if (currentMoveIndex === 0) {
+        logMessage("No moves to undo.");
+        return;
+    }
+
+    isRequestInProgress = true;
+    setButtonsDisabled(true);
+    logMessage("Undoing last move...");
+
+    // Undo the last move in the history
+    const lastMove = moveHistory.pop();
+    currentMoveIndex = moveHistory.length;
+
+    const { state } = game.getStateFromMoves(moveHistory);
+    boardState = state;
+
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
+
+    isRequestInProgress = false;
+    setButtonsDisabled(false);
+    logMessage(`Undid last move: Column ${lastMove}`);
 }
 
 async function handlePlayerMove(column) {
