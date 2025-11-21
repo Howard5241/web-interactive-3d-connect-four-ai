@@ -91,32 +91,8 @@ def ai_move():
     ai_action_probs = mcts.search(state)
     ai_action = int(np.argmax(ai_action_probs))
 
-    # Apply AI's move
-    state = game.get_next_state(state, ai_action)
-    move_history.append(ai_action)
-
-    # Check for game over
-    value, _ = game.get_value_and_terminated(state)
-    is_terminal = game.check_game_over(state)
-    winner = None
-    status = "Ongoing"
-    if is_terminal:
-        status = "Game Over"
-        if value == -1: # A win occurred
-            # After a winning move, get_current_player returns the *next* player.
-            # Therefore, the winner is the player who is NOT the current player.
-            winner = "Player 2" if game.get_current_player(state) == 1 else "Player 1"
-        else: # A draw
-            winner = "Draw"
-
-    session['board_state'] = state.tolist()
-    session['move_history'] = move_history
-    return jsonify({
-        "board": session['board_state'],
-        "status": status,
-        "winner": winner,
-        "move_history": session['move_history']
-    })
+    # The frontend will handle state updates. Just return the move.
+    return jsonify({"move": ai_action})
 
 @app.route('/api/minimax_move', methods=['POST'])
 def minimax_move():

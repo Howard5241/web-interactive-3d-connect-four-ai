@@ -16,11 +16,12 @@ let player2Color = 0xf50000; // Red
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
-let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE;
+let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE;
 
 let gameSettings = {
     pieceSize: 1.0,
-    pieceOpacity: 1.0
+    pieceOpacity: 1.0,
+    autoAIMove: false
 };
 
 let moveHistory = [];
@@ -47,6 +48,7 @@ function init() {
     PIECE_SIZE_VALUE = document.getElementById('piece-size-value');
     PIECE_OPACITY_SLIDER = document.getElementById('piece-opacity-slider');
     PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
+    AUTO_AI_TOGGLE = document.getElementById('auto-ai-toggle');
 
     // Game Logic
     game = new ConnectFour3D();
@@ -123,6 +125,11 @@ function init() {
         gameSettings.pieceOpacity = newOpacity;
         PIECE_OPACITY_VALUE.textContent = newOpacity.toFixed(1);
         updateBoard(boardState);
+    });
+
+    AUTO_AI_TOGGLE.addEventListener('change', (event) => {
+        gameSettings.autoAIMove = event.target.checked;
+        logMessage(`Auto AI Move ${gameSettings.autoAIMove ? 'enabled' : 'disabled'}.`);
     });
 
     window.addEventListener('keydown', handleKeyDown);
@@ -374,7 +381,7 @@ async function undoLastMove() {
 
     isRequestInProgress = false;
     setButtonsDisabled(false);
-    logMessage(`Undid last move: Column ${lastMove}`);
+    logMessage(`Undid last move: ${lastMove}`);
 }
 
 async function handlePlayerMove(column) {
@@ -408,7 +415,13 @@ async function handlePlayerMove(column) {
     updateMoveHistory(moveHistory);
 
     // Check for game over locally
-    checkGameOver('You win!', 'Your turn! Click a column or let the AI play.');
+    if (!checkGameOver('You win!', 'Your turn! Click a column or let the AI play.')) {
+        // If auto-play is on, and the game is not over, trigger the AI move
+        if (gameSettings.autoAIMove) {
+            // Use a timeout to give the player a moment to see their move
+            setTimeout(() => requestAIMove(), 100);
+        }
+    }
 }
 
 // New function to handle the AI move request
@@ -447,11 +460,12 @@ async function requestAIMove() {
         if (!response.ok) throw new Error('AI server error.');
         
         const data = await response.json();
-        
-        // The server returns the new state, so we update our local state
-        boardState = data.board;
-        moveHistory = data.move_history;
-        currentMoveIndex = moveHistory.length;
+        const move = data.move;
+
+        // Apply the move returned by the AI
+        boardState = game.getNextState(boardState, move);
+        moveHistory.push(move);
+        currentMoveIndex++;
 
         updateBoard(boardState);
         updateMoveHistory(moveHistory);
