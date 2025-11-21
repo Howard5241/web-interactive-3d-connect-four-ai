@@ -16,12 +16,13 @@ let player2Color = 0xf50000; // Red
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
-let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE;
+let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE;
 
 let gameSettings = {
     pieceSize: 1.0,
     pieceOpacity: 1.0,
-    autoAIMove: false
+    autoAIMove: false,
+    autoMinimaxMove: false
 };
 
 let moveHistory = [];
@@ -49,6 +50,7 @@ function init() {
     PIECE_OPACITY_SLIDER = document.getElementById('piece-opacity-slider');
     PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
     AUTO_AI_TOGGLE = document.getElementById('auto-ai-toggle');
+    AUTO_MINIMAX_TOGGLE = document.getElementById('auto-minimax-toggle');
 
     // Game Logic
     game = new ConnectFour3D();
@@ -129,7 +131,20 @@ function init() {
 
     AUTO_AI_TOGGLE.addEventListener('change', (event) => {
         gameSettings.autoAIMove = event.target.checked;
+        if (gameSettings.autoAIMove) {
+            AUTO_MINIMAX_TOGGLE.checked = false;
+            gameSettings.autoMinimaxMove = false;
+        }
         logMessage(`Auto AI Move ${gameSettings.autoAIMove ? 'enabled' : 'disabled'}.`);
+    });
+
+    AUTO_MINIMAX_TOGGLE.addEventListener('change', (event) => {
+        gameSettings.autoMinimaxMove = event.target.checked;
+        if (gameSettings.autoMinimaxMove) {
+            AUTO_AI_TOGGLE.checked = false;
+            gameSettings.autoAIMove = false;
+        }
+        logMessage(`Auto Minimax Move ${gameSettings.autoMinimaxMove ? 'enabled' : 'disabled'}.`);
     });
 
     window.addEventListener('keydown', handleKeyDown);
@@ -416,10 +431,12 @@ async function handlePlayerMove(column) {
 
     // Check for game over locally
     if (!checkGameOver('You win!', 'Your turn! Click a column or let the AI play.')) {
-        // If auto-play is on, and the game is not over, trigger the AI move
+        // If auto-play is on, and the game is not over, trigger the appropriate AI move
         if (gameSettings.autoAIMove) {
             // Use a timeout to give the player a moment to see their move
             setTimeout(() => requestAIMove(), 100);
+        } else if (gameSettings.autoMinimaxMove) {
+            setTimeout(() => requestMinimaxMove(), 100);
         }
     }
 }
