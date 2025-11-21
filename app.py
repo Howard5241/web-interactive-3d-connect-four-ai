@@ -71,55 +71,8 @@ def new_game():
         "move_history": session['move_history']
     })
 
-# NEW ENDPOINT 1: Handles only the player's move
-@app.route('/api/player_move', methods=['POST'])
-def player_move():
-    """ Handles only the player's move and returns the updated board immediately. """
-    # Get the player's move from the request
-    data = request.get_json()
-    player_action = data.get('column')
 
-    # Retrieve the current board state from the session
-    board_state_list = session.get('board_state')
-    move_history = session.get('move_history', [])
-    if board_state_list is None:
-        return jsonify({"error": "Game not started."}), 400
-    
-    state = np.array(board_state_list, dtype=np.int8)
-
-    # Validate and apply player's move
-    valid_moves = game.get_valid_moves(state)
-    if player_action is None or not (0 <= player_action < game.num_actions) or valid_moves[player_action] == 0:
-        return jsonify({"error": "Invalid move."}), 400
-
-    state = game.get_next_state(state, player_action)
-    move_history.append(player_action)
-    
-    # Check for game over
-    value, _ = game.get_value_and_terminated(state)
-    is_terminal = game.check_game_over(state)
-    winner = None
-    status = "Ongoing"
-    if is_terminal:
-        status = "Game Over"
-        if value == -1: # A win occurred
-            # After a winning move, get_current_player returns the *next* player.
-            # Therefore, the winner is the player who is NOT the current player.
-            winner = "Player 2" if game.get_current_player(state) == 1 else "Player 1"
-        else: # A draw
-            winner = "Draw"
-
-    # Store the new state and return
-    session['board_state'] = state.tolist()
-    session['move_history'] = move_history
-    return jsonify({
-        "board": session['board_state'],
-        "status": status,
-        "winner": winner,
-        "move_history": session['move_history']
-    })
-
-# NEW ENDPOINT 2: Handles only the AI's move
+# ENDPOINT: Handles only the AI's move
 @app.route('/api/ai_move', methods=['POST'])
 def ai_move():
     """ Takes the current board state and computes the AI's response. """
@@ -236,45 +189,8 @@ def set_state():
     return jsonify({"message": "State updated successfully."})
 
 
-@app.route('/api/game_status', methods=['GET'])
-def game_status():
-    """ Checks the current game status without making a move. """
-    board_state_list = session.get('board_state')
-    if board_state_list is None:
-        # If there's no board in the session, the game hasn't started.
-        # We can create a new one to be safe.
-        initial_state = game.get_initial_state()
-        session['board_state'] = initial_state.tolist()
-        session['move_history'] = []
-        board_state_list = initial_state.tolist()
 
-    state = np.array(board_state_list, dtype=np.int8)
-
-    # Use existing game logic to check for termination and winner
-    value, _ = game.get_value_and_terminated(state)
-    is_terminal = game.check_game_over(state)
-    
-    winner = None
-    status = "Ongoing"
-
-    if is_terminal:
-        status = "Game Over"
-        if value == -1:  # A win occurred for the last player
-            # The winner is the player who is NOT the current player.
-            winner_player_id = game.get_current_player(state) * -1
-            winner = "Player 1" if winner_player_id == 1 else "Player 2"
-        else:  # A draw
-            winner = "Draw"
-    
-    return jsonify({
-        "status": status,
-        "winner": winner,
-        "board": board_state_list,
-        "move_history": session.get('move_history', [])
-    })
-
-
-# --- 4. RUN THE APP ---
+# --- RUN THE APP ---
 
 if __name__ == '__main__':
     # Use threaded=False to avoid issues with PyTorch model in multi-threaded context

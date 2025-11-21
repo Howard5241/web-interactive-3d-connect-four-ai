@@ -120,12 +120,7 @@ function init() {
         const newOpacity = parseFloat(event.target.value);
         gameSettings.pieceOpacity = newOpacity;
         PIECE_OPACITY_VALUE.textContent = newOpacity.toFixed(1);
-        // We need the current board state to redraw
-        fetch('/api/game_status').then(res => res.json()).then(data => {
-            if (data.board) {
-                updateBoard(data.board);
-            }
-        });
+        updateBoard(boardState);
     });
 
     window.addEventListener('keydown', handleKeyDown);

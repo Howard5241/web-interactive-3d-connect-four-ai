@@ -1,22 +1,25 @@
 # 🚀 Interactive 3D Connect Four AI 🤖
 
-Welcome to the ultimate 3D Connect Four experience! This project brings the classic strategy game into a new dimension, allowing you to challenge a powerful deep learning AI opponent directly in your web browser. Built with a Python/Flask backend and a dynamic Three.js frontend, this is more than just a game—it's an interactive showcase of modern AI.
+Welcome to the ultimate 3D Connect Four experience! This project brings the classic strategy game into a new dimension, allowing you to challenge two powerful AI opponents—a deep learning agent or a classic Minimax algorithm—directly in your web browser. Built with a Python/Flask backend and a dynamic Three.js frontend, this is more than just a game—it's an interactive showcase of modern AI.
 
-
+![Gameplay GIF](https://i.imgur.com/example.gif)
 *(Feel free to replace this image with a GIF of your own gameplay!)*
 
 ---
 
 ## ✨ Key Features
 
-*   **Stunning 3D Gameplay:** Play Connect Four on a fully rendered 4x4x4 grid.
-*   **Powerful AI Opponent:** Challenge an AI powered by a PyTorch ResNet model and a Monte Carlo Tree Search (MCTS) algorithm.
+*   **Stunning 3D Gameplay:** Play Connect Four on a fully rendered and interactive 4x4x4 grid.
+*   **Two Powerful AI Opponents:**
+    *   **Neural Network AI:** Challenge an AI powered by a PyTorch ResNet model and a Monte Carlo Tree Search (MCTS) algorithm.
+    *   **Minimax AI:** Play against a classic, formidable Minimax AI implemented in C++.
 *   **Interactive Camera Controls:** Rotate, pan, and zoom around the board to view the game from any angle.
 *   **Live Move Preview:** See exactly where your piece will land with a semi-transparent preview that appears as you hover over each column.
-*   **Customizable Visuals:** Use the settings menu to adjust the size and opacity of the game pieces to your liking.
-*   **Full Move History Navigation:** Step backward and forward through the game's move history using the arrow keys to review the entire match.
-*   **Load Game State:** Instantly jump to any board position by pasting a sequence of moves into the move history input box.
-*   **Responsive UI:** Your moves appear instantly on the board, providing a smooth and satisfying user experience.
+*   **Full Move History Navigation:**
+    *   Use the **arrow keys** to step backward and forward through the game's move history.
+    *   Instantly jump to any board position by pasting a sequence of moves (e.g., `1 3 12 15`) into the move history input box.
+*   **Customizable Visuals:** Use the settings menu to adjust the size and opacity of the game pieces in real-time.
+*   **State Management:** Copy the board state as a hex code or a list of moves to share or analyze positions.
 *   **Web-Based:** No installation required for players! Just open a URL and start playing.
 
 ---
@@ -29,6 +32,7 @@ This project is a full-stack application combining a powerful backend for AI com
 | 🧠 **Backend**  | **Python 3** with **Flask**                                             | Serves the web application and provides a REST API for gameplay. |
 |           | **PyTorch**                                                             | Runs the pre-trained `ResNet3D` model for AI move evaluation.    |
 |           | **NumPy**                                                               | Handles game state representation and logic efficiently.         |
+|           | **C++ Executable**                                                      | A pre-compiled Minimax engine (`connect4_3D.exe`) for an alternative AI opponent. |
 | ✨ **Frontend** | **JavaScript (ES6 Modules)**                                            | Manages game flow, user interactions, and API communication.     |
 |           | **Three.js**                                                            | Renders the 3D board, pieces, and handles camera controls.       |
 |           | **HTML5 / CSS3**                                                        | Structures the webpage and provides a clean, modern design.      |
@@ -43,26 +47,25 @@ The application is architected to provide a seamless user experience by separati
 
 The Flask server is the core of the application, responsible for:
 *   **Loading the AI:** At startup, the server loads the trained PyTorch `ResNet3D` model into memory for fast access.
-*   **Session Management:** It uses Flask sessions to keep track of the board state for each individual user, allowing multiple people to play simultaneously without interfering with each other.
+*   **Session Management:** It uses Flask sessions to keep track of the board state for each individual user, allowing multiple people to play simultaneously.
 *   **API Endpoints:** It exposes a simple REST API:
     *   `POST /api/new_game`: Clears the session and creates a fresh 4x4x4 board.
-    *   `POST /api/player_move`: Receives the player's move, validates it, updates the board, and returns the new state.
-    *   `POST /api/ai_move`: Triggers the MCTS algorithm to compute the AI's best move based on the current board state and returns the final state.
-    *   `POST /api/set_state`: Explicitly sets the board state and move history, used to sync the frontend with the backend.
-    *   `GET /api/game_status`: Returns the current board, move history, and game status (ongoing, win, draw).
+    *   `POST /api/ai_move`: Triggers the PyTorch MCTS algorithm to compute its best move.
+    *   `POST /api/minimax_move`: Calls the external C++ executable to get a move from the Minimax AI.
+    *   `POST /api/set_state`: Allows the frontend to explicitly set the board state on the server, ensuring synchronization before an AI move.
 
 ### 2. The Frontend (The Experience ✨)
 
 The frontend is a single-page application that handles all visuals and user input:
-*   **3D Rendering:** `Three.js` is used to create the scene, including the 3D grid and the game pieces (spheres).
-*   **Camera Controls:** The `OrbitControls` addon allows the user to intuitively drag to rotate, right-drag to pan, and scroll to zoom.
+*   **3D Rendering:** `Three.js` is used to create the scene, including the 3D grid and the game pieces.
+*   **Game Logic Mirroring:** A client-side version of the game logic (`gameLogic.js`) provides instant feedback for user moves and board state calculations (like generating hex codes).
 *   **User Input:** A `Raycaster` detects which column the user clicks on or hovers over.
-*   **Settings Modal:** A pop-up window allows the user to customize the piece size and opacity in real-time.
-*   **Responsive Game Flow:** The game flow is designed to be interactive and give the user control.
-    1.  When the user clicks a column, the frontend updates the board state **locally** for an instant response.
-    2.  The game then waits for the user's next action. The user can click the "AI Move" button to have the AI play its turn.
-    3.  When the AI move is requested, the frontend first syncs its local state with the server.
-    4.  A "thinking" message is displayed while the backend computes the move. The board is updated upon completion.
+*   **Game Flow:**
+    1.  When the user makes a move, the frontend updates the board state **locally** for an instant response.
+    2.  To request an AI move, the user clicks either the "AI Move" or "Minimax Move" button.
+    3.  The frontend first syncs its local state with the server using the `/api/set_state` endpoint.
+    4.  It then calls the appropriate AI endpoint. A "thinking" message is displayed while the backend computes the move.
+    5.  The board is updated with the AI's move upon receiving the response from the server.
 
 ---
 
@@ -74,7 +77,8 @@ Follow these steps to run the application on your local machine.
 
 *   Python 3.8+
 *   `pip` for installing Python packages
-*   A trained PyTorch model file (`.pth`) from your original project.
+*   A trained PyTorch model file (`.pth`).
+*   The compiled C++ Minimax executable (`connect4_3D.exe`).
 
 ### Installation & Setup
 
@@ -91,15 +95,19 @@ Follow these steps to run the application on your local machine.
     python -m venv venv
     source venv/bin/activate  # On Windows, use `venv\Scripts\activate`
 
-    # Install the required packages
+    # Install the required packages from requirements.txt
     pip install -r requirements.txt
     ```
-    *(Note: Create a `requirements.txt` file with the content: `Flask`, `torch`, `numpy`)*
 
-3.  **Place the AI Model**
-    *   Create a directory named `models` in the project root.
-    *   Copy your trained model file into this directory and rename it to `model_best.pth`.
-    *   The final path should be: `models/model_best.pth`.
+3.  **Place Project Binaries**
+    *   **AI Model:**
+        *   Ensure the `models` directory exists in the project root.
+        *   Copy your trained model file into this directory and name it `model_best.pth`.
+        *   The final path should be: `models/model_best.pth`.
+    *   **Minimax Executable:**
+        *   Ensure the `bin` directory exists in the project root.
+        *   Place the `connect4_3D.exe` file inside it.
+        *   The final path should be: `bin/connect4_3D.exe`.
 
 4.  **Run the Application**
     *   Start the Flask server from the root directory:
@@ -118,18 +126,22 @@ Follow these steps to run the application on your local machine.
 
 ```
 /connect4-web-app/
+├── bin/
+│   └── connect4_3D.exe     # The C++ Minimax AI executable
 ├── models/
 │   └── model_best.pth      # Your trained PyTorch model
 ├── static/
 │   ├── css/
-│   │   └── style.css       # Styles for the info panel
+│   │   └── style.css       # Styles for the UI
 │   └── js/
-│       └── main.js         # The core Three.js and game logic script
+│       ├── gameLogic.js    # Client-side game logic for responsiveness
+│       └── main.js         # The core Three.js and game flow script
 ├── templates/
 │   └── index.html          # The main HTML page served to the user
-├── ai_agent.py             # Contains ResNet, MCTS, and Node classes
-├── game_logic.py           # Contains the ConnectFour3D game engine
+├── ai_agent.py             # Contains ResNet, MCTS, and Node classes for the PyTorch AI
 ├── app.py                  # The main Flask server application
+├── game_logic.py           # The backend ConnectFour3D game engine
+├── requirements.txt        # Python package dependencies
 └── README.md               # You are here!
 ```
 
@@ -138,7 +150,7 @@ Follow these steps to run the application on your local machine.
 ## 🔮 Future Improvements
 
 This project has a solid foundation, but there's always room for more features!
--   [ ] **Difficulty Levels:** Allow the user to select an AI difficulty (e.g., by changing the `num_simulations` for MCTS).
+-   [ ] **Difficulty Levels:** Allow the user to select an AI difficulty (e.g., by changing the `num_simulations` for MCTS or search depth for Minimax).
 -   [ ] **Player vs. Player Mode:** Implement a local hot-seat mode for two human players.
 -   [ ] **Visual Enhancements:** Add piece-dropping animations and sound effects.
 -   [ ] **Deployment:** Write instructions for deploying the app to a service like Heroku or DigitalOcean.
