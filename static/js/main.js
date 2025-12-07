@@ -8,10 +8,12 @@ let game; // Game logic instance
 let boardState; // Current state of the board
 let clickTargets = []; // Invisible planes for detecting clicks
 let pieces = []; // To hold the visible game pieces
+let ghostPieces = []; // To hold the ghost pieces for planning
 let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
 let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
+let ghostPlayer1Material, ghostPlayer2Material;
 
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
@@ -81,6 +83,20 @@ function init() {
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1.0);
     directionalLight.position.set(5, 10, 7.5);
     scene.add(directionalLight);
+
+    // Ghost Piece Materials
+    ghostPlayer1Material = new THREE.MeshStandardMaterial({
+        color: player1Color,
+        roughness: 0.5,
+        opacity: 0.3,
+        transparent: true
+    });
+    ghostPlayer2Material = new THREE.MeshStandardMaterial({
+        color: player2Color,
+        roughness: 0.5,
+        opacity: 0.3,
+        transparent: true
+    });
 
     // Draw Board Structure
     drawBoardGrid();
@@ -188,7 +204,7 @@ async function copyHexCode() {
     }
 }
 
-// --- 3D BOARD DRAWING --- (No changes in this section)
+// --- 3D BOARD DRAWING --- 
 
 function drawBoardGrid() {
     const material = new THREE.LineBasicMaterial({ color: 0x555555 });
@@ -212,6 +228,11 @@ function drawBoardGrid() {
     scene.add(line);
 }
 
+function clearGhostPieces() {
+    ghostPieces.forEach(p => scene.remove(p));
+    ghostPieces = [];
+}
+
 function createClickTargets() {
     const planeGeo = new THREE.PlaneGeometry(1, 1);
     const planeMat = new THREE.MeshBasicMaterial({ visible: false, side: THREE.DoubleSide });
@@ -232,6 +253,8 @@ function updateBoard(boardState) {
     // Clear existing pieces
     pieces.forEach(p => scene.remove(p));
     pieces = [];
+
+    clearGhostPieces();
 
     // Also remove the preview piece when the board updates
     if (previewPiece) {
@@ -293,7 +316,7 @@ function updateMoveHistory(newMoveHistory) {
 }
 
 
-// --- GAME LOGIC & SERVER COMMUNICATION (MODIFIED) ---
+// --- GAME LOGIC & SERVER COMMUNICATION ---
 
 function logMessage(message) {
     // Update the main status message
@@ -441,7 +464,7 @@ async function handlePlayerMove(column) {
     }
 }
 
-// New function to handle the AI move request
+// function to handle the AI move request
 async function requestAIMove() {
     if (isRequestInProgress) return;
     if (currentMoveIndex !== moveHistory.length) {
@@ -500,7 +523,7 @@ async function requestAIMove() {
     }
 }
 
-// New function to handle the minimax move request
+// function to handle the minimax move request
 async function requestMinimaxMove() {
     if (isRequestInProgress) return;
     if (currentMoveIndex !== moveHistory.length) {
@@ -558,6 +581,7 @@ async function navigateHistory(direction) {
     const newIndex = currentMoveIndex + direction;
 
     if (newIndex < 0 || newIndex > moveHistory.length) {
+        clearGhostPieces();
         return; // Out of bounds
     }
 
@@ -661,8 +685,56 @@ function onColumnClick(event) {
 
     if (intersects.length > 0) {
         const clickedColumn = intersects[0].object.userData.column;
-        handlePlayerMove(clickedColumn);
+        if (event.button === 0) { // Left click
+            handlePlayerMove(clickedColumn);
+        } else if (event.button === 2) { // Right click
+            handleGhostMove(clickedColumn);
+        }
     }
+}
+
+function handleGhostMove(column) {
+    const tempState = getTemporaryState();
+    const landingPosition = game.getLandingPosition(tempState, column);
+
+    if (!landingPosition) {
+        logMessage('Invalid ghost move: Column is full.');
+        return;
+    }
+
+    const player = game.getCurrentPlayer(tempState);
+    const [depth, row, col] = landingPosition;
+
+    const pieceRadius = 0.4 * gameSettings.pieceSize;
+    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
+    const material = player === 1 ? ghostPlayer1Material : ghostPlayer2Material;
+
+    const piece = new THREE.Mesh(pieceGeo, material);
+    piece.position.set(col, 3 - depth, row);
+    piece.userData.isGhost = true;
+    scene.add(piece);
+    ghostPieces.push(piece);
+}
+
+function getTemporaryState() {
+    let tempState = JSON.parse(JSON.stringify(boardState)); // Deep copy
+
+    ghostPieces.forEach(p => {
+        const { x, y, z } = p.position;
+        const boardZ = 3 - y;
+        const boardY = z;
+        const boardX = x;
+        
+        // This is a simplified player check. A more robust way might be needed
+        // if ghost pieces for both players can be on the board.
+        const player = (p.material === ghostPlayer1Material) ? 1 : -1;
+
+        if (boardZ >= 0 && boardZ < 4 && boardY >= 0 && boardY < 4 && boardX >= 0 && boardX < 4) {
+            tempState[boardZ][boardY][boardX] = player;
+        }
+    });
+
+    return tempState;
 }
 
 function onMouseMove(event) {
