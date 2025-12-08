@@ -8,7 +8,6 @@ import csv
 import os
 import glob
 import re
-import imageio
 from PIL import Image
 import io
 class ConnectFour3D():
