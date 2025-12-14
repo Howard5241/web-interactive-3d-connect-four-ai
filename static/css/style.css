@@ -98,6 +98,82 @@ h1 {
     padding: 10px 15px;
 }
 
+/* Puzzle Mode Styles */
+.separator {
+    border: 0;
+    height: 1px;
+    background: #444;
+    margin: 15px 0;
+}
+
+#puzzle-section {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+#upload-puzzle-btn, #exit-puzzle-btn {
+    width: 100%;
+    padding: 8px;
+    background-color: #4a90e2;
+    color: white;
+    border: none;
+    border-radius: 5px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.2s;
+}
+
+#upload-puzzle-btn:hover, #exit-puzzle-btn:hover {
+    background-color: #357abd;
+}
+
+#exit-puzzle-btn {
+    background-color: #e74c3c;
+    margin-top: 5px;
+}
+
+#exit-puzzle-btn:hover {
+    background-color: #c0392b;
+}
+
+.puzzle-info {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 5px;
+}
+
+.puzzle-info h3 {
+    margin: 0;
+    color: #4a90e2;
+    font-size: 1.1em;
+}
+
+.puzzle-nav {
+    display: flex;
+    gap: 5px;
+    justify-content: center;
+}
+
+.puzzle-nav button {
+    flex: 1;
+    padding: 5px;
+    background-color: #555;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.puzzle-nav button:hover {
+    background-color: #666;
+}
+
+.hidden {
+    display: none !important;
+}
+
 #log-container h2 {
     margin-top: 0;
     margin-bottom: 10px;

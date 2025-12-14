@@ -19,6 +19,26 @@
             <button id="ai-move-btn" disabled>AI Move</button>
             <button id="minimax-move-btn" disabled>Minimax Move</button>
         </div>
+        
+        <hr class="separator">
+
+        <div id="puzzle-section">
+            <input type="file" id="puzzle-file-input" accept=".txt" style="display: none;">
+            <button id="upload-puzzle-btn">📂 Load Puzzles</button>
+            
+            <div id="puzzle-controls" class="hidden">
+                <div class="puzzle-info">
+                    <h3>Puzzle Mode</h3>
+                    <span id="puzzle-status">1 / 1</span>
+                </div>
+                <div class="puzzle-nav">
+                    <button id="prev-puzzle-btn" title="Previous Puzzle">&lt;</button>
+                    <button id="reset-puzzle-btn" title="Reset Current Puzzle">↻</button>
+                    <button id="next-puzzle-btn" title="Next Puzzle">&gt;</button>
+                </div>
+                <button id="exit-puzzle-btn">Exit Puzzle Mode</button>
+            </div>
+        </div>
     </div>
     <div id="settings-modal-overlay" class="hidden">
         <div id="settings-modal">

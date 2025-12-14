@@ -13,6 +13,8 @@ let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
 let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
+let player1GhostColor = 0xfff19c; // Yellow (ghost)
+let player2GhostColor = 0xff7575; // Red (ghost)
 let ghostPlayer1Material, ghostPlayer2Material;
 
 // DOM Elements (will be assigned in init)
@@ -29,6 +31,12 @@ let gameSettings = {
 
 let moveHistory = [];
 let currentMoveIndex = 0;
+
+// --- PUZZLE MODE VARIABLES ---
+let isPuzzleMode = false;
+let puzzles = [];
+let currentPuzzleIndex = 0;
+let currentPuzzleSolutionIndex = 0;
 
 // --- INITIALIZATION ---
 
@@ -53,6 +61,24 @@ function init() {
     PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
     AUTO_AI_TOGGLE = document.getElementById('auto-ai-toggle');
     AUTO_MINIMAX_TOGGLE = document.getElementById('auto-minimax-toggle');
+
+    // Puzzle Mode Elements
+    const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
+    const UPLOAD_PUZZLE_BTN = document.getElementById('upload-puzzle-btn');
+    const PUZZLE_CONTROLS = document.getElementById('puzzle-controls');
+    const PREV_PUZZLE_BTN = document.getElementById('prev-puzzle-btn');
+    const NEXT_PUZZLE_BTN = document.getElementById('next-puzzle-btn');
+    const RESET_PUZZLE_BTN = document.getElementById('reset-puzzle-btn');
+    const EXIT_PUZZLE_BTN = document.getElementById('exit-puzzle-btn');
+    const PUZZLE_STATUS = document.getElementById('puzzle-status');
+
+    // Puzzle Event Listeners
+    UPLOAD_PUZZLE_BTN.addEventListener('click', () => PUZZLE_FILE_INPUT.click());
+    PUZZLE_FILE_INPUT.addEventListener('change', handlePuzzleFileUpload);
+    PREV_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex - 1));
+    NEXT_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex + 1));
+    RESET_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex));
+    EXIT_PUZZLE_BTN.addEventListener('click', exitPuzzleMode);
 
     // Game Logic
     game = new ConnectFour3D();
@@ -86,15 +112,15 @@ function init() {
 
     // Ghost Piece Materials
     ghostPlayer1Material = new THREE.MeshStandardMaterial({
-        color: player1Color,
+        color: player1GhostColor,
         roughness: 0.5,
-        opacity: 0.3,
+        opacity: 0.9,
         transparent: true
     });
     ghostPlayer2Material = new THREE.MeshStandardMaterial({
-        color: player2Color,
+        color: player2GhostColor,
         roughness: 0.5,
-        opacity: 0.3,
+        opacity: 0.9,
         transparent: true
     });
 
@@ -424,6 +450,13 @@ async function undoLastMove() {
 
 async function handlePlayerMove(column) {
     if (isRequestInProgress) return;
+
+    // --- PUZZLE MODE INTERCEPTION ---
+    if (isPuzzleMode) {
+        handlePuzzleMove(column);
+        return;
+    }
+
     if (currentMoveIndex !== moveHistory.length) {
         logMessage('You must be at the most recent move to play.');
         return;
@@ -794,6 +827,141 @@ function animate() {
     requestAnimationFrame(animate);
     controls.update(); // only required if controls.enableDamping = true
     renderer.render(scene, camera);
+}
+
+// --- PUZZLE MODE FUNCTIONS ---
+
+function handlePuzzleFileUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const text = e.target.result;
+        const parsedPuzzles = parsePuzzleFile(text);
+        if (parsedPuzzles.length > 0) {
+            puzzles = parsedPuzzles;
+            startPuzzleMode();
+        } else {
+            alert("No valid puzzles found in the file.");
+        }
+    };
+    reader.readAsText(file);
+}
+
+function parsePuzzleFile(text) {
+    const lines = text.trim().split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const parsed = [];
+    
+    for (let i = 0; i < lines.length; i += 2) {
+        if (i + 1 >= lines.length) break;
+        
+        const historyLine = lines[i];
+        const solutionLine = lines[i+1];
+        
+        const history = historyLine.split(/\s+/).map(Number).filter(n => !isNaN(n));
+        const solution = solutionLine.split(/\s+/).map(Number).filter(n => !isNaN(n));
+        
+        if (solution.length > 0) {
+            parsed.push({ history, solution });
+        }
+    }
+    return parsed;
+}
+
+function startPuzzleMode() {
+    isPuzzleMode = true;
+    currentPuzzleIndex = 0;
+    
+    // Show puzzle controls, hide game controls
+    document.getElementById('puzzle-controls').classList.remove('hidden');
+    document.getElementById('button-container').classList.add('hidden');
+    document.getElementById('move-history-container').classList.add('hidden');
+    
+    loadPuzzle(0);
+}
+
+function exitPuzzleMode() {
+    isPuzzleMode = false;
+    puzzles = [];
+    
+    // Hide puzzle controls, show game controls
+    document.getElementById('puzzle-controls').classList.add('hidden');
+    document.getElementById('button-container').classList.remove('hidden');
+    document.getElementById('move-history-container').classList.remove('hidden');
+    
+    // Reset file input
+    document.getElementById('puzzle-file-input').value = '';
+    
+    startNewGame();
+}
+
+function loadPuzzle(index) {
+    if (index < 0 || index >= puzzles.length) return;
+    
+    currentPuzzleIndex = index;
+    const puzzle = puzzles[currentPuzzleIndex];
+    currentPuzzleSolutionIndex = 0;
+    
+    // Update UI
+    document.getElementById('puzzle-status').textContent = `Puzzle ${index + 1} / ${puzzles.length}`;
+    document.getElementById('prev-puzzle-btn').disabled = (index === 0);
+    document.getElementById('next-puzzle-btn').disabled = (index === puzzles.length - 1);
+    
+    logMessage(`Loaded Puzzle ${index + 1}. Your turn!`);
+    
+    // Set board state from history
+    const { state } = game.getStateFromMoves(puzzle.history);
+    boardState = state;
+    moveHistory = [...puzzle.history]; // Copy history
+    currentMoveIndex = moveHistory.length;
+    
+    updateBoard(boardState);
+}
+
+async function handlePuzzleMove(column) {
+    const puzzle = puzzles[currentPuzzleIndex];
+    const expectedMove = puzzle.solution[currentPuzzleSolutionIndex];
+    
+    if (column === expectedMove) {
+        // Correct move
+        logMessage("Correct move!");
+        
+        // Apply user move
+        boardState = game.getNextState(boardState, column);
+        moveHistory.push(column);
+        updateBoard(boardState);
+        
+        currentPuzzleSolutionIndex++;
+        
+        // Check if puzzle is finished
+        if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
+            logMessage("Puzzle Solved! 🎉");
+            return;
+        }
+        
+        // Opponent's response
+        const opponentMove = puzzle.solution[currentPuzzleSolutionIndex];
+        
+        // Small delay for opponent move
+        await new Promise(resolve => setTimeout(resolve, 500));
+        
+        logMessage(`Opponent plays column ${opponentMove}.`);
+        boardState = game.getNextState(boardState, opponentMove);
+        moveHistory.push(opponentMove);
+        updateBoard(boardState);
+        
+        currentPuzzleSolutionIndex++;
+        
+        if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
+            logMessage("Puzzle Solved! 🎉");
+        } else {
+            logMessage("Your turn!");
+        }
+        
+    } else {
+        logMessage("Wrong move! Try again.");
+    }
 }
 
 // --- START ---
