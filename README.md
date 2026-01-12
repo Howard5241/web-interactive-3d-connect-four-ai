@@ -2,8 +2,7 @@
 
 Welcome to the ultimate 3D Connect Four experience! This project brings the classic strategy game into a new dimension, allowing you to challenge two powerful AI opponents—a deep learning agent or a classic Minimax algorithm—directly in your web browser. Built with a Python/Flask backend and a dynamic Three.js frontend, this is more than just a game—it's an interactive showcase of modern AI.
 
-![Gameplay GIF](https://i.imgur.com/example.gif)
-*(Feel free to replace this image with a GIF of your own gameplay!)*
+![Gameplay Demo](./assets/gamePlay.gif)
 
 ---
 
