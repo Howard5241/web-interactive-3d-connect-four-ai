@@ -500,6 +500,12 @@ async function handlePlayerMove(column) {
 // function to handle the AI move request
 async function requestAIMove() {
     if (isRequestInProgress) return;
+
+    if (previewPiece) {
+        scene.remove(previewPiece);
+        previewPiece = null;
+    }
+
     if (currentMoveIndex !== moveHistory.length) {
         logMessage('You must be at the most recent move to play.');
         return;
@@ -559,6 +565,12 @@ async function requestAIMove() {
 // function to handle the minimax move request
 async function requestMinimaxMove() {
     if (isRequestInProgress) return;
+
+    if (previewPiece) {
+        scene.remove(previewPiece);
+        previewPiece = null;
+    }
+
     if (currentMoveIndex !== moveHistory.length) {
         logMessage('You must be at the most recent move to play.');
         return;
