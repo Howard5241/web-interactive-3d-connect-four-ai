@@ -9,6 +9,8 @@ import re
 # --- Local Imports ---
 from game_logic import ConnectFour3D
 from ai_agent import ResNet3D, MCTS
+from puzzle_bank import (PuzzleBank, GenerationManager,
+                         CATEGORIES, CATEGORY_BY_KEY, category_for_mate)
 
 # --- 1. INITIALIZATION ---
 
@@ -24,9 +26,7 @@ print(f"Using device: {device}")
 # Game and AI Hyperparameters (should match your trained model's config)
 args = {
     'C': 2.0,
-    'num_simulations': 300, # Number of MCTS simulations for AI move
-    'num_resBlocks': 20,
-    'num_hidden': 512,
+    'num_simulations': 500, # Number of MCTS simulations for AI move
     # Add other args if your MCTS needs them (e.g., dirichlet)
     'dirichlet_epsilon': 0.0,
     'dirichlet_alpha': 0.3,
@@ -34,14 +34,50 @@ args = {
 
 # --- 2. LOAD THE MODEL (ONCE AT STARTUP) ---
 
-# Instantiate the game and model
-game = ConnectFour3D()
-model = ResNet3D(game, args['num_resBlocks'], args['num_hidden'], device)
+def detect_model_config(state_dict):
+    """
+    Infer the ResNet3D architecture (num_resBlocks, num_hidden) directly from a
+    saved state_dict, so app.py stays in sync with whatever checkpoint is loaded
+    instead of relying on hard-coded hyperparameters.
 
-# Load the trained model weights
+    - num_hidden  = out-channels of the start block conv (Conv3d(4, num_hidden, ...)),
+                    i.e. the first dimension of 'startBlock.0.weight'.
+    - num_resBlocks = number of residual blocks in the backbone, i.e. one more than
+                    the highest index seen in 'backBone.<i>.*' keys.
+    """
+    num_hidden = state_dict['startBlock.0.weight'].shape[0]
+
+    block_indices = set()
+    for key in state_dict:
+        m = re.match(r'backBone\.(\d+)\.', key)
+        if m:
+            block_indices.add(int(m.group(1)))
+    num_resBlocks = (max(block_indices) + 1) if block_indices else 0
+
+    return num_resBlocks, num_hidden
+
+# Instantiate the game
+game = ConnectFour3D()
+
+# Load the trained model weights, auto-detecting the architecture from the checkpoint
+model_path = 'models/model_best.pth' # Make sure this path is correct
 try:
-    model_path = 'models/model_best.pth' # Make sure this path is correct
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    state_dict = torch.load(model_path, map_location=device)
+    # Unwrap common checkpoint containers if the file isn't a bare state_dict.
+    if 'startBlock.0.weight' not in state_dict:
+        for key in ('state_dict', 'model_state_dict', 'model'):
+            if isinstance(state_dict.get(key), dict):
+                state_dict = state_dict[key]
+                break
+
+    # Detect architecture from the weights and keep `args` in sync.
+    num_resBlocks, num_hidden = detect_model_config(state_dict)
+    n_params = sum(v.numel() for v in state_dict.values())
+    print(f"Detected model architecture: num_resBlocks={num_resBlocks}, "
+          f"num_hidden={num_hidden} ({n_params:,} parameters)")
+
+    model = ResNet3D(game, num_resBlocks, num_hidden, device)
+    model.load_state_dict(state_dict)
     model.eval() # Set the model to evaluation mode
     print(f"Model loaded successfully from {model_path}")
 except FileNotFoundError:
@@ -50,6 +86,18 @@ except FileNotFoundError:
 
 # Instantiate the MCTS search
 mcts = MCTS(game, args, model)
+
+
+# --- 2b. PUZZLE BANK (engine-generated puzzles for Puzzle Mode) ---
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PUZZLE_DIR = os.path.join(BASE_DIR, 'puzzles')
+ENGINE_EXE = os.path.join(BASE_DIR, 'bin', 'connect4_3D.exe')
+
+puzzle_bank = PuzzleBank(PUZZLE_DIR)
+generation_manager = GenerationManager(puzzle_bank, ENGINE_EXE, PUZZLE_DIR)
+print(f"Puzzle bank loaded from {PUZZLE_DIR}: {puzzle_bank.counts()} "
+      f"(total {puzzle_bank.total()})")
 
 
 # --- 3. DEFINE API ROUTES (MODIFIED SECTION) ---
@@ -161,9 +209,92 @@ def set_state():
 
     session['board_state'] = board_state
     session['move_history'] = move_history
-    
+
     return jsonify({"message": "State updated successfully."})
 
+
+# --- PUZZLE MODE ENDPOINTS ---
+
+@app.route('/api/puzzle', methods=['GET'])
+def get_puzzle():
+    """Serve a random engine-generated puzzle, avoiding ones recently served to this
+    session. Prefer the `category` param (quick/medium/long/endgame); a bare `mate`
+    param is still accepted for a single mate length."""
+    category_key = request.args.get('category')
+    if category_key is not None:
+        cat = CATEGORY_BY_KEY.get(category_key)
+        if cat is None:
+            return jsonify({"error": f"Unknown category '{category_key}'."}), 400
+        served_key = category_key
+        min_mate, max_mate = cat['min'], cat['max']
+        empty_msg = f"No {cat['label']} puzzles in the bank yet. The engine is generating — try again shortly."
+    else:
+        try:
+            mate = int(request.args.get('mate', 1))
+            if mate < 1:
+                raise ValueError
+        except (TypeError, ValueError):
+            return jsonify({"error": "Invalid mate length."}), 400
+        served_key = f"mate{mate}"
+        min_mate = max_mate = mate
+        empty_msg = f"No mate-in-{mate} puzzles in the bank yet. Try again shortly."
+
+    served = session.get('served_puzzles', {})
+    recent = served.get(served_key, [])
+    puzzle = puzzle_bank.get_random_range(min_mate, max_mate, exclude_ids=recent)
+
+    if puzzle is None:
+        return jsonify({
+            "error": empty_msg,
+            "empty": True,
+            "counts": puzzle_bank.counts(),
+            "category_counts": puzzle_bank.category_counts(),
+        }), 404
+
+    # Remember this id to avoid immediate repeats (cap history so the cookie stays small).
+    served[served_key] = ([puzzle['id']] + recent)[:30]
+    session['served_puzzles'] = served
+
+    return jsonify({
+        "history": puzzle['history'],
+        "solution": puzzle['solution'],
+        "mate": puzzle['mate'],
+        "category": category_for_mate(puzzle['mate']),
+        "id": puzzle['id'],
+        "counts": puzzle_bank.counts(),
+        "category_counts": puzzle_bank.category_counts(),
+    })
+
+
+@app.route('/api/puzzle/counts', methods=['GET'])
+def puzzle_counts():
+    """Available puzzles per mate length and per category, plus the category defs."""
+    return jsonify({
+        "counts": puzzle_bank.counts(),
+        "category_counts": puzzle_bank.category_counts(),
+        "categories": CATEGORIES,
+        "total": puzzle_bank.total(),
+    })
+
+
+@app.route('/api/puzzle/generate/start', methods=['POST'])
+def generate_start():
+    """Begin continuous background generation (small, interruptible batches that
+    grow every mate-length bucket). Idempotent while already running."""
+    started, status = generation_manager.start()
+    return jsonify({"started": started, "status": status})
+
+
+@app.route('/api/puzzle/generate/stop', methods=['POST'])
+def generate_stop():
+    """Stop continuous generation and free the engine immediately."""
+    return jsonify({"status": generation_manager.stop()})
+
+
+@app.route('/api/puzzle/generate/status', methods=['GET'])
+def generate_status():
+    """Poll the continuous background generator (running flag, session total, counts)."""
+    return jsonify({"status": generation_manager.status()})
 
 
 # --- RUN THE APP ---

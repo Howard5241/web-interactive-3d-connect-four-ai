@@ -24,11 +24,30 @@
 
         <div id="puzzle-section">
             <input type="file" id="puzzle-file-input" accept=".txt" style="display: none;">
-            <button id="upload-puzzle-btn">📂 Load Puzzles</button>
-            
+            <button id="engine-puzzle-btn">🧩 Puzzle Mode</button>
+            <button id="upload-puzzle-btn">📂 Load from File</button>
+
+            <div id="engine-puzzle-setup" class="hidden">
+                <h3>Puzzle Mode</h3>
+                <p class="setup-label">Choose a category (forced winning moves to find):</p>
+                <div id="category-selector">
+                    <button class="cat-btn selected" data-category="quick">Quick&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;1–3</span></button>
+                    <button class="cat-btn" data-category="medium">Medium&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;4–5</span></button>
+                    <button class="cat-btn" data-category="long">Long&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;6–11</span></button>
+                    <button class="cat-btn" data-category="endgame">Endgame<span class="cat-sub">mate&nbsp;in&nbsp;12+</span></button>
+                </div>
+                <div id="mate-count-hint" class="mate-count-hint"></div>
+                <div class="setup-actions">
+                    <button id="start-puzzle-btn">▶ Start Solving</button>
+                    <button id="generate-puzzle-btn" title="Pause or resume the background generator">⏸ Pause generating</button>
+                </div>
+                <div id="generate-status" class="generate-status"></div>
+                <button id="cancel-engine-setup-btn" class="link-btn">Cancel</button>
+            </div>
+
             <div id="puzzle-controls" class="hidden">
                 <div class="puzzle-info">
-                    <h3>Puzzle Mode</h3>
+                    <h3 id="puzzle-title">Puzzle Mode</h3>
                     <span id="puzzle-status">1 / 1</span>
                 </div>
                 <div class="puzzle-nav">
@@ -36,7 +55,9 @@
                     <button id="reset-puzzle-btn" title="Reset Current Puzzle">↻</button>
                     <button id="next-puzzle-btn" title="Next Puzzle">&gt;</button>
                 </div>
+                <button id="show-solution-btn">💡 Show Solution</button>
                 <button id="exit-puzzle-btn">Exit Puzzle Mode</button>
+                <div id="puzzle-gen-indicator" class="generate-status"></div>
             </div>
         </div>
     </div>

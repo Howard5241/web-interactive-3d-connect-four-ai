@@ -37,6 +37,21 @@ let isPuzzleMode = false;
 let puzzles = [];
 let currentPuzzleIndex = 0;
 let currentPuzzleSolutionIndex = 0;
+let puzzleSource = null;          // 'file' | 'engine'
+let selectedCategory = 'quick';  // chosen difficulty category for engine puzzles
+// Category definitions (mirrors puzzle_bank.CATEGORIES); refreshed from the server.
+let CATEGORIES = [
+    { key: 'quick',   label: 'Quick win',  range_label: 'mate in 1–3',  min: 1,  max: 3 },
+    { key: 'medium',  label: 'Medium win', range_label: 'mate in 4–5',  min: 4,  max: 5 },
+    { key: 'long',    label: 'Long win',   range_label: 'mate in 6–11', min: 6,  max: 11 },
+    { key: 'endgame', label: 'Endgame',    range_label: 'mate in 12+',  min: 12, max: null },
+];
+const categoryLabel = (key) => (CATEGORIES.find(c => c.key === key) || {}).label || key;
+let currentPuzzleSolved = false;
+let generationPollTimer = null;  // interval id while a background generation runs
+let generationRunning = false;   // is the engine currently auto-generating?
+let lastCounts = {};             // most recent per-mate bank counts
+let lastCategoryCounts = {};     // most recent per-category bank counts
 
 // --- INITIALIZATION ---
 
@@ -65,20 +80,36 @@ function init() {
     // Puzzle Mode Elements
     const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
     const UPLOAD_PUZZLE_BTN = document.getElementById('upload-puzzle-btn');
-    const PUZZLE_CONTROLS = document.getElementById('puzzle-controls');
     const PREV_PUZZLE_BTN = document.getElementById('prev-puzzle-btn');
     const NEXT_PUZZLE_BTN = document.getElementById('next-puzzle-btn');
     const RESET_PUZZLE_BTN = document.getElementById('reset-puzzle-btn');
     const EXIT_PUZZLE_BTN = document.getElementById('exit-puzzle-btn');
-    const PUZZLE_STATUS = document.getElementById('puzzle-status');
+    const SHOW_SOLUTION_BTN = document.getElementById('show-solution-btn');
+
+    // Engine puzzle setup elements
+    const ENGINE_PUZZLE_BTN = document.getElementById('engine-puzzle-btn');
+    const CANCEL_ENGINE_SETUP_BTN = document.getElementById('cancel-engine-setup-btn');
+    const START_PUZZLE_BTN = document.getElementById('start-puzzle-btn');
+    const GENERATE_PUZZLE_BTN = document.getElementById('generate-puzzle-btn');
+    const CATEGORY_SELECTOR = document.getElementById('category-selector');
 
     // Puzzle Event Listeners
     UPLOAD_PUZZLE_BTN.addEventListener('click', () => PUZZLE_FILE_INPUT.click());
     PUZZLE_FILE_INPUT.addEventListener('change', handlePuzzleFileUpload);
-    PREV_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex - 1));
-    NEXT_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex + 1));
+    PREV_PUZZLE_BTN.addEventListener('click', handlePrevPuzzle);
+    NEXT_PUZZLE_BTN.addEventListener('click', handleNextPuzzle);
     RESET_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex));
     EXIT_PUZZLE_BTN.addEventListener('click', exitPuzzleMode);
+    SHOW_SOLUTION_BTN.addEventListener('click', showSolution);
+
+    // Engine puzzle setup listeners
+    ENGINE_PUZZLE_BTN.addEventListener('click', openEnginePuzzleSetup);
+    CANCEL_ENGINE_SETUP_BTN.addEventListener('click', closeEnginePuzzleSetup);
+    START_PUZZLE_BTN.addEventListener('click', () => startEnginePuzzle(selectedCategory));
+    GENERATE_PUZZLE_BTN.addEventListener('click', toggleGeneration);
+    CATEGORY_SELECTOR.querySelectorAll('.cat-btn').forEach(btn => {
+        btn.addEventListener('click', () => selectCategory(btn.dataset.category));
+    });
 
     // Game Logic
     game = new ConnectFour3D();
@@ -132,6 +163,9 @@ function init() {
     window.addEventListener('resize', onWindowResize);
     renderer.domElement.addEventListener('mousedown', onColumnClick);
     renderer.domElement.addEventListener('mousemove', onMouseMove);
+    // Right-click is used for planning ghosts (place on a column, clear on empty space),
+    // so suppress the browser context menu over the board canvas.
+    renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
     MINIMAX_MOVE_BTN.addEventListener('click', requestMinimaxMove);
@@ -696,6 +730,7 @@ function handleKeyDown(event) {
         return;
     }
     if (isRequestInProgress) return;
+    if (isPuzzleMode) return;   // don't let history nav disrupt an active puzzle
 
     if (event.key === 'ArrowLeft') {
         navigateHistory(-1);
@@ -735,6 +770,9 @@ function onColumnClick(event) {
         } else if (event.button === 2) { // Right click
             handleGhostMove(clickedColumn);
         }
+    } else if (event.button === 2) {
+        // Right-click on empty space (not over a drop column) clears all planning ghosts.
+        clearGhostPieces();
     }
 }
 
@@ -843,17 +881,20 @@ function animate() {
 
 // --- PUZZLE MODE FUNCTIONS ---
 
+// ---- File-uploaded puzzles ----
+
 function handlePuzzleFileUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
     const reader = new FileReader();
     reader.onload = function(e) {
-        const text = e.target.result;
-        const parsedPuzzles = parsePuzzleFile(text);
+        const parsedPuzzles = parsePuzzleFile(e.target.result);
         if (parsedPuzzles.length > 0) {
             puzzles = parsedPuzzles;
-            startPuzzleMode();
+            puzzleSource = 'file';
+            enterPuzzleMode();
+            loadPuzzle(0);
         } else {
             alert("No valid puzzles found in the file.");
         }
@@ -861,119 +902,355 @@ function handlePuzzleFileUpload(event) {
     reader.readAsText(file);
 }
 
+function isBoardCodeLine(line) {
+    const toks = line.split(/\s+/).filter(t => t.length);
+    if (toks.length !== 2) return false;
+    if (!toks.every(t => /^[0-9a-fA-F]+$/.test(t))) return false;
+    return toks.some(t => t.length > 2); // move values are 0-15 (<= 2 chars)
+}
+
+function parseMoveLine(line) {
+    const toks = line.split(/\s+/).filter(t => t.length);
+    const out = [];
+    for (const t of toks) {
+        const v = Number(t);
+        if (!Number.isInteger(v)) return null;
+        out.push(v);
+    }
+    return out;
+}
+
+// Handles both the old 2-line format (history / solution) and the engine's new
+// 3-line format (board code / history / solution).
 function parsePuzzleFile(text) {
-    const lines = text.trim().split('\n').map(line => line.trim()).filter(line => line.length > 0);
+    const raw = text.split('\n').map(l => l.trim());
     const parsed = [];
-    
-    for (let i = 0; i < lines.length; i += 2) {
-        if (i + 1 >= lines.length) break;
-        
-        const historyLine = lines[i];
-        const solutionLine = lines[i+1];
-        
-        const history = historyLine.split(/\s+/).map(Number).filter(n => !isNaN(n));
-        const solution = solutionLine.split(/\s+/).map(Number).filter(n => !isNaN(n));
-        
-        if (solution.length > 0) {
-            parsed.push({ history, solution });
+    let i = 0;
+    const n = raw.length;
+    while (i < n) {
+        if (raw[i] === '') { i++; continue; }
+        let history, solution;
+        if (isBoardCodeLine(raw[i])) {
+            if (i + 2 >= n) break;
+            history = raw[i + 1] === '' ? [] : parseMoveLine(raw[i + 1]);
+            solution = parseMoveLine(raw[i + 2]);
+            i += 3;
+        } else {
+            if (i + 1 >= n) break;
+            history = parseMoveLine(raw[i]);
+            solution = parseMoveLine(raw[i + 1]);
+            i += 2;
+        }
+        if (history && solution && solution.length && solution.length % 2 === 1 &&
+            solution.every(m => m >= 0 && m < 16) && history.every(m => m >= 0 && m < 16)) {
+            parsed.push({ history, solution, mate: (solution.length + 1) / 2 });
         }
     }
     return parsed;
 }
 
-function startPuzzleMode() {
+// ---- Engine puzzles (server-sourced) ----
+
+function openEnginePuzzleSetup() {
+    document.getElementById('engine-puzzle-setup').classList.remove('hidden');
+    document.getElementById('button-container').classList.add('hidden');
+    document.getElementById('engine-puzzle-btn').classList.add('hidden');
+    document.getElementById('upload-puzzle-btn').classList.add('hidden');
+    refreshMateCounts();
+    // The engine keeps generating & verifying puzzles in the background the whole
+    // time the puzzle UI is open -- no need to press a button.
+    startBackgroundGeneration();
+}
+
+function closeEnginePuzzleSetup() {
+    document.getElementById('engine-puzzle-setup').classList.add('hidden');
+    if (!isPuzzleMode) {
+        stopBackgroundGeneration();   // left the puzzle area entirely -> free the engine
+        document.getElementById('button-container').classList.remove('hidden');
+        document.getElementById('engine-puzzle-btn').classList.remove('hidden');
+        document.getElementById('upload-puzzle-btn').classList.remove('hidden');
+    }
+}
+
+function renderMateHint(counts, categoryCounts) {
+    if (counts) lastCounts = counts;
+    if (categoryCounts) lastCategoryCounts = categoryCounts;
+    const cc = lastCategoryCounts || {};
+    const sel = CATEGORIES.find(c => c.key === selectedCategory) || CATEGORIES[0];
+    const n = cc[selectedCategory] || 0;
+    const summary = CATEGORIES.map(c => `${c.label.split(' ')[0]} ${cc[c.key] || 0}`).join('  ·  ');
+    document.getElementById('mate-count-hint').textContent =
+        `${n} ${sel.label} puzzles (${sel.range_label}) available   —   ${summary}`;
+}
+
+function selectCategory(key) {
+    selectedCategory = key;
+    document.querySelectorAll('.cat-btn').forEach(b => {
+        b.classList.toggle('selected', b.dataset.category === key);
+    });
+    renderMateHint();
+}
+
+async function refreshMateCounts() {
+    try {
+        const res = await fetch('/api/puzzle/counts');
+        const data = await res.json();
+        if (Array.isArray(data.categories) && data.categories.length) CATEGORIES = data.categories;
+        renderMateHint(data.counts || {}, data.category_counts || {});
+    } catch (e) { /* non-critical */ }
+}
+
+async function startEnginePuzzle(category) {
+    if (isRequestInProgress) return;
+    isRequestInProgress = true;
+    const label = categoryLabel(category);
+    logMessage(`Fetching a ${label} puzzle from the engine...`);
+    try {
+        const res = await fetch(`/api/puzzle?category=${encodeURIComponent(category)}`);
+        const data = await res.json();
+        if (data.category_counts) renderMateHint(data.counts, data.category_counts);
+        if (!res.ok || data.empty) {
+            logMessage(data.error || 'No puzzle available.');
+            document.getElementById('generate-status').textContent =
+                `No ${label} puzzles yet — the engine is generating; try again shortly.`;
+            return;
+        }
+        puzzles = [{ history: data.history, solution: data.solution, mate: data.mate, id: data.id }];
+        puzzleSource = 'engine';
+        selectedCategory = category;
+        if (!isPuzzleMode) enterPuzzleMode();
+        loadPuzzle(0);
+    } catch (e) {
+        logMessage('Error fetching puzzle: ' + e.message);
+    } finally {
+        isRequestInProgress = false;
+    }
+}
+
+function updateGenerateButton() {
+    const btn = document.getElementById('generate-puzzle-btn');
+    if (btn) btn.textContent = generationRunning ? '⏸ Pause generating' : '▶ Resume generating';
+}
+
+function toggleGeneration() {
+    if (generationRunning) stopBackgroundGeneration();
+    else startBackgroundGeneration();
+}
+
+async function startBackgroundGeneration() {
+    generationRunning = true;
+    updateGenerateButton();
+    startGenerationPolling();
+    try {
+        await fetch('/api/puzzle/generate/start', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+}
+
+async function stopBackgroundGeneration() {
+    stopGenerationPolling();
+    generationRunning = false;
+    updateGenerateButton();
+    try {
+        await fetch('/api/puzzle/generate/stop', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+}
+
+function startGenerationPolling() {
+    stopGenerationPolling();
+    pollGenerationStatus();
+    generationPollTimer = setInterval(pollGenerationStatus, 2500);
+}
+
+function stopGenerationPolling() {
+    if (generationPollTimer) {
+        clearInterval(generationPollTimer);
+        generationPollTimer = null;
+    }
+}
+
+async function pollGenerationStatus() {
+    try {
+        const res = await fetch('/api/puzzle/generate/status');
+        const data = await res.json();
+        const st = data.status || {};
+        generationRunning = !!st.running;
+        updateGenerateButton();
+        renderMateHint(st.counts, st.category_counts);
+        const msg = st.running
+            ? `⚙️ Engine generating in the background… +${st.session_added || 0} puzzles this session`
+            : (st.message || 'Generation paused.');
+        const genStatus = document.getElementById('generate-status');
+        if (genStatus) genStatus.textContent = msg;
+        const genIndicator = document.getElementById('puzzle-gen-indicator');
+        if (genIndicator) genIndicator.textContent = msg;
+    } catch (e) { /* keep polling */ }
+}
+
+// ---- Shared puzzle mode machinery ----
+
+function enterPuzzleMode() {
     isPuzzleMode = true;
     currentPuzzleIndex = 0;
-    
-    // Show puzzle controls, hide game controls
+    document.getElementById('engine-puzzle-setup').classList.add('hidden');
     document.getElementById('puzzle-controls').classList.remove('hidden');
     document.getElementById('button-container').classList.add('hidden');
-    document.getElementById('move-history-container').classList.add('hidden');
-    
-    loadPuzzle(0);
+    // Keep the move-history panel visible in puzzle mode: it holds the "copy moves"
+    // and "copy state hex" buttons, which are useful for analysing the position.
+    document.getElementById('engine-puzzle-btn').classList.add('hidden');
+    document.getElementById('upload-puzzle-btn').classList.add('hidden');
 }
 
 function exitPuzzleMode() {
     isPuzzleMode = false;
     puzzles = [];
-    
-    // Hide puzzle controls, show game controls
+    puzzleSource = null;
+    currentPuzzleSolved = false;
+    stopBackgroundGeneration();   // leaving Puzzle Mode frees the engine immediately
+
     document.getElementById('puzzle-controls').classList.add('hidden');
+    document.getElementById('engine-puzzle-setup').classList.add('hidden');
     document.getElementById('button-container').classList.remove('hidden');
     document.getElementById('move-history-container').classList.remove('hidden');
-    
-    // Reset file input
+    document.getElementById('engine-puzzle-btn').classList.remove('hidden');
+    document.getElementById('upload-puzzle-btn').classList.remove('hidden');
+
     document.getElementById('puzzle-file-input').value = '';
-    
     startNewGame();
+}
+
+function handlePrevPuzzle() {
+    if (puzzleSource === 'engine') return;   // engine puzzles have no back-history
+    loadPuzzle(currentPuzzleIndex - 1);
+}
+
+function handleNextPuzzle() {
+    if (puzzleSource === 'engine') {
+        startEnginePuzzle(selectedCategory); // fetch a fresh random puzzle in the same category
+    } else {
+        loadPuzzle(currentPuzzleIndex + 1);
+    }
+}
+
+function updatePuzzleInfo() {
+    const title = document.getElementById('puzzle-title');
+    const status = document.getElementById('puzzle-status');
+    const prev = document.getElementById('prev-puzzle-btn');
+    const next = document.getElementById('next-puzzle-btn');
+
+    if (puzzleSource === 'engine') {
+        // Deliberately do NOT show the objective mate distance -- the point of the puzzle
+        // is to find the win without knowing how many moves it takes.
+        title.textContent = categoryLabel(selectedCategory);
+        status.textContent = currentPuzzleSolved ? 'Solved ✓' : 'Your move';
+        prev.disabled = true;
+        next.disabled = false;
+        prev.title = 'Not available for engine puzzles';
+        next.title = 'New puzzle';
+    } else {
+        title.textContent = 'Puzzle';
+        status.textContent = `${currentPuzzleIndex + 1} / ${puzzles.length}`;
+        prev.disabled = (currentPuzzleIndex === 0);
+        next.disabled = (currentPuzzleIndex === puzzles.length - 1);
+        prev.title = 'Previous Puzzle';
+        next.title = 'Next Puzzle';
+    }
 }
 
 function loadPuzzle(index) {
     if (index < 0 || index >= puzzles.length) return;
-    
+
     currentPuzzleIndex = index;
     const puzzle = puzzles[currentPuzzleIndex];
     currentPuzzleSolutionIndex = 0;
-    
-    // Update UI
-    document.getElementById('puzzle-status').textContent = `Puzzle ${index + 1} / ${puzzles.length}`;
-    document.getElementById('prev-puzzle-btn').disabled = (index === 0);
-    document.getElementById('next-puzzle-btn').disabled = (index === puzzles.length - 1);
-    
-    logMessage(`Loaded Puzzle ${index + 1}. Your turn!`);
-    
-    // Set board state from history
+    currentPuzzleSolved = false;
+
+    // Set board state from the puzzle's move history
     const { state } = game.getStateFromMoves(puzzle.history);
     boardState = state;
-    moveHistory = [...puzzle.history]; // Copy history
+    moveHistory = [...puzzle.history];
     currentMoveIndex = moveHistory.length;
-    
     updateBoard(boardState);
+    updateMoveHistory(moveHistory);   // keep the (visible) history panel in sync
+
+    updatePuzzleInfo();
+
+    const colorName = game.getCurrentPlayer(boardState) === 1 ? 'Yellow' : 'Red';
+    const label = puzzleSource === 'engine'
+        ? categoryLabel(selectedCategory)
+        : `Puzzle ${index + 1}`;
+    logMessage(`${label} — ${colorName} to move.`);
 }
 
 async function handlePuzzleMove(column) {
+    if (currentPuzzleSolved) {
+        logMessage('Puzzle already solved — click > for a new one.');
+        return;
+    }
     const puzzle = puzzles[currentPuzzleIndex];
     const expectedMove = puzzle.solution[currentPuzzleSolutionIndex];
-    
-    if (column === expectedMove) {
-        // Correct move
-        logMessage("Correct move!");
-        
-        // Apply user move
-        boardState = game.getNextState(boardState, column);
-        moveHistory.push(column);
-        updateBoard(boardState);
-        
-        currentPuzzleSolutionIndex++;
-        
-        // Check if puzzle is finished
-        if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
-            logMessage("Puzzle Solved! 🎉");
-            return;
-        }
-        
-        // Opponent's response
-        const opponentMove = puzzle.solution[currentPuzzleSolutionIndex];
-        
-        // Small delay for opponent move
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        logMessage(`Opponent plays column ${opponentMove}.`);
-        boardState = game.getNextState(boardState, opponentMove);
-        moveHistory.push(opponentMove);
-        updateBoard(boardState);
-        
-        currentPuzzleSolutionIndex++;
-        
-        if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
-            logMessage("Puzzle Solved! 🎉");
-        } else {
-            logMessage("Your turn!");
-        }
-        
-    } else {
-        logMessage("Wrong move! Try again.");
+
+    if (column !== expectedMove) {
+        logMessage('Not the winning move — try again (↻ to reset, 💡 for the solution).');
+        return;
     }
+
+    // Correct solver move
+    logMessage('Correct!');
+    boardState = game.getNextState(boardState, column);
+    moveHistory.push(column);
+    currentMoveIndex = moveHistory.length;
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
+    currentPuzzleSolutionIndex++;
+
+    if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
+        finishPuzzle();
+        return;
+    }
+
+    // Opponent's forced reply (from the stored solution line)
+    const opponentMove = puzzle.solution[currentPuzzleSolutionIndex];
+    isRequestInProgress = true;   // lock input during the reply animation
+    await new Promise(resolve => setTimeout(resolve, 450));
+    boardState = game.getNextState(boardState, opponentMove);
+    moveHistory.push(opponentMove);
+    currentMoveIndex = moveHistory.length;
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
+    currentPuzzleSolutionIndex++;
+    isRequestInProgress = false;
+
+    if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
+        finishPuzzle();
+    } else {
+        logMessage(`Opponent replied (column ${opponentMove}). Your move — find the win!`);
+    }
+}
+
+function finishPuzzle() {
+    currentPuzzleSolved = true;
+    updatePuzzleInfo();
+    logMessage('Puzzle solved! 🎉  Click > for a new one.');
+}
+
+async function showSolution() {
+    if (!isPuzzleMode || currentPuzzleSolved) return;
+    const puzzle = puzzles[currentPuzzleIndex];
+    logMessage('Showing the solution...');
+    isRequestInProgress = true;
+    for (let i = currentPuzzleSolutionIndex; i < puzzle.solution.length; i++) {
+        await new Promise(resolve => setTimeout(resolve, 450));
+        boardState = game.getNextState(boardState, puzzle.solution[i]);
+        moveHistory.push(puzzle.solution[i]);
+        currentMoveIndex = moveHistory.length;
+        updateBoard(boardState);
+        updateMoveHistory(moveHistory);
+    }
+    currentPuzzleSolutionIndex = puzzle.solution.length;
+    currentPuzzleSolved = true;
+    isRequestInProgress = false;
+    updatePuzzleInfo();
+    logMessage('Solution shown. Click > for a new puzzle.');
 }
 
 // --- START ---
