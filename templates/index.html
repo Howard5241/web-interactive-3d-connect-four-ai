@@ -76,6 +76,11 @@
                     <input type="range" id="piece-opacity-slider" min="0.0" max="1.0" step="0.05" value="1">
                     <span id="piece-opacity-value">1.0</span>
                 </div>
+                <div class="slider-container">
+                    <label for="outline-thickness-slider">Outline Thickness</label>
+                    <input type="range" id="outline-thickness-slider" min="0" max="0.5" step="0.05" value="0.05">
+                    <span id="outline-thickness-value">0.05</span>
+                </div>
                 <div class="setting-item">
                     <label for="auto-ai-toggle">Auto-play AI Move</label>
                     <label class="switch">
@@ -87,6 +92,13 @@
                     <label for="auto-minimax-toggle">Auto-play Minimax Move</label>
                     <label class="switch">
                         <input type="checkbox" id="auto-minimax-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <div class="setting-item">
+                    <label for="drop-animation-toggle">Piece Drop Animation</label>
+                    <label class="switch">
+                        <input type="checkbox" id="drop-animation-toggle" checked>
                         <span class="slider round"></span>
                     </label>
                 </div>

@@ -15,19 +15,32 @@ let player1Color = 0xffdc00; // Yellow
 let player2Color = 0xf50000; // Red
 let player1GhostColor = 0xfff19c; // Yellow (ghost)
 let player2GhostColor = 0xff7575; // Red (ghost)
+let player1OutlineColor = 0xfff27a; // Yellow (occlusion outline)
+let player2OutlineColor = 0xff6b6b; // Red (occlusion outline)
 let ghostPlayer1Material, ghostPlayer2Material;
+
+// Camera-facing outline rings, shown only where a piece is hidden behind another.
+let pieceOutlines = []; // [{ ring, piece }]
 
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
-let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE;
+let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE, DROP_ANIMATION_TOGGLE;
+let OUTLINE_THICKNESS_SLIDER, OUTLINE_THICKNESS_VALUE;
 
 let gameSettings = {
     pieceSize: 1.0,
     pieceOpacity: 1.0,
     autoAIMove: false,
-    autoMinimaxMove: false
+    autoMinimaxMove: false,
+    dropAnimation: true,
+    outlineThickness: 0.05   // occlusion outline width, as a fraction of the piece radius (0 = off)
 };
+
+// --- DROP ANIMATION ---
+let activeDrops = [];            // in-flight piece drops: { mesh, startY, endY, start, duration }
+const DROP_SPAWN_Y = 6.5;        // fixed height above the grid where a played piece spawns
+const DROP_DURATION_MS = 450;    // time for a piece to fall to its cell
 
 let moveHistory = [];
 let currentMoveIndex = 0;
@@ -76,6 +89,9 @@ function init() {
     PIECE_OPACITY_VALUE = document.getElementById('piece-opacity-value');
     AUTO_AI_TOGGLE = document.getElementById('auto-ai-toggle');
     AUTO_MINIMAX_TOGGLE = document.getElementById('auto-minimax-toggle');
+    DROP_ANIMATION_TOGGLE = document.getElementById('drop-animation-toggle');
+    OUTLINE_THICKNESS_SLIDER = document.getElementById('outline-thickness-slider');
+    OUTLINE_THICKNESS_VALUE = document.getElementById('outline-thickness-value');
 
     // Puzzle Mode Elements
     const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
@@ -157,6 +173,7 @@ function init() {
 
     // Draw Board Structure
     drawBoardGrid();
+    drawCornerLabels();
     createClickTargets();
 
     // Event Listeners
@@ -205,6 +222,13 @@ function init() {
         updateBoard(boardState);
     });
 
+    OUTLINE_THICKNESS_SLIDER.addEventListener('input', (event) => {
+        const newThickness = parseFloat(event.target.value);
+        gameSettings.outlineThickness = newThickness;
+        OUTLINE_THICKNESS_VALUE.textContent = newThickness.toFixed(2);
+        updateBoard(boardState);
+    });
+
     AUTO_AI_TOGGLE.addEventListener('change', (event) => {
         gameSettings.autoAIMove = event.target.checked;
         if (gameSettings.autoAIMove) {
@@ -221,6 +245,11 @@ function init() {
             gameSettings.autoAIMove = false;
         }
         logMessage(`Auto Minimax Move ${gameSettings.autoMinimaxMove ? 'enabled' : 'disabled'}.`);
+    });
+
+    DROP_ANIMATION_TOGGLE.addEventListener('change', (event) => {
+        gameSettings.dropAnimation = event.target.checked;
+        logMessage(`Piece drop animation ${gameSettings.dropAnimation ? 'enabled' : 'disabled'}.`);
     });
 
     window.addEventListener('keydown', handleKeyDown);
@@ -267,7 +296,11 @@ async function copyHexCode() {
 // --- 3D BOARD DRAWING --- 
 
 function drawBoardGrid() {
-    const material = new THREE.LineBasicMaterial({ color: 0x555555 });
+    // depthWrite:false keeps the grid out of the depth buffer, so the occlusion
+    // outlines (which draw where a piece is behind existing depth) are triggered
+    // only by other pieces and never by these thin lines. depthTest stays on, so
+    // pieces still correctly draw over the lines.
+    const material = new THREE.LineBasicMaterial({ color: 0x555555, depthWrite: false });
     const points = [];
     const size = 4;
     const offset = -0.5;
@@ -286,6 +319,50 @@ function drawBoardGrid() {
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.LineSegments(geometry, material);
     scene.add(line);
+}
+
+// Build a camera-facing text label (a Sprite always faces the camera).
+function makeTextSprite(text) {
+    const canvas = document.createElement('canvas');
+    const S = 256;
+    canvas.width = S;
+    canvas.height = S;
+    const ctx = canvas.getContext('2d');
+    ctx.font = 'bold 150px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineWidth = 12;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.85)';
+    ctx.strokeText(text, S / 2, S / 2);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, S / 2, S / 2);
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.minFilter = THREE.LinearFilter;
+    // depthWrite:false so these overlay labels never populate the depth buffer and
+    // therefore never trigger a piece's occlusion outline.
+    const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
+    const sprite = new THREE.Sprite(material);
+    sprite.scale.set(0.9, 0.9, 0.9);
+    return sprite;
+}
+
+// Label the four bottom-layer corner columns (0, 3, 12, 15). Each number sits
+// diagonally outside its corner cell so it reads as belonging to that column.
+// A column index maps to grid coords: x = col % 4, z = floor(col / 4).
+function drawCornerLabels() {
+    const out = 1.2; // how far outside the grid (grid spans -0.5..3.5) to place labels
+    const labels = [
+        { n: 0,  x: -out,     z: -out },     // corner cell (x=0, z=0): to the left & front
+        { n: 3,  x: 3 + out,  z: -out },     // corner cell (x=3, z=0)
+        { n: 12, x: -out,     z: 3 + out },  // corner cell (x=0, z=3)
+        { n: 15, x: 3 + out,  z: 3 + out },  // corner cell (x=3, z=3)
+    ];
+    for (const l of labels) {
+        const sprite = makeTextSprite(String(l.n));
+        sprite.position.set(l.x, 0, l.z); // y = 0 is the bottom layer
+        scene.add(sprite);
+    }
 }
 
 function clearGhostPieces() {
@@ -309,10 +386,20 @@ function createClickTargets() {
     }
 }
 
-function updateBoard(boardState) {
+// dropCoords, when provided as [depth, row, col], is the cell of a just-played
+// piece; if the drop animation is enabled that piece spawns above the grid and
+// falls into place instead of appearing instantly.
+function updateBoard(boardState, dropCoords = null) {
+    // Any in-flight drops reference pieces we are about to remove -- drop them.
+    activeDrops = [];
+
     // Clear existing pieces
     pieces.forEach(p => scene.remove(p));
     pieces = [];
+
+    // Clear occlusion outlines (rebuilt alongside the pieces below)
+    pieceOutlines.forEach(o => scene.remove(o.ring));
+    pieceOutlines = [];
 
     clearGhostPieces();
 
@@ -324,32 +411,83 @@ function updateBoard(boardState) {
 
     const pieceRadius = 0.4 * gameSettings.pieceSize;
     const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
-    
+
     const isTransparent = gameSettings.pieceOpacity < 1.0;
 
-    const player1Mat = new THREE.MeshStandardMaterial({ 
-        color: player1Color, 
-        roughness: 0.5,
-        opacity: gameSettings.pieceOpacity,
-        transparent: isTransparent
-    });
-    const player2Mat = new THREE.MeshStandardMaterial({ 
-        color: player2Color, 
-        roughness: 0.5,
-        opacity: gameSettings.pieceOpacity,
-        transparent: isTransparent
-    });
+    // Outline ring geometry: its OUTER edge sits at the silhouette and it extends
+    // INWARD by the chosen thickness, so the outline never spills past the piece's own
+    // image. Self-occlusion is prevented by per-piece stencil ids (below), not by the
+    // ring's placement, so it can safely reach the edge. Skipped when thickness is 0.
+    const outlineThickness = gameSettings.outlineThickness;
+    const showOutlines = outlineThickness > 0;
+    const outlineGeo = showOutlines
+        ? new THREE.RingGeometry(Math.max(0, pieceRadius * (1 - outlineThickness)), pieceRadius, 48)
+        : null;
+
+    // Each piece stamps a unique id (1..64) into the stencil buffer wherever it is the
+    // front-most surface. A piece's outline then draws only where the front-most piece
+    // is a DIFFERENT piece, so a piece can never trigger its own outline.
+    let stencilId = 0;
 
     for (let z = 0; z < 4; z++) { // Depth
         for (let y = 0; y < 4; y++) { // Row
             for (let x = 0; x < 4; x++) { // Col
                 const pieceValue = boardState[z][y][x];
                 if (pieceValue !== 0) {
-                    const material = (pieceValue === 1) ? player1Mat : player2Mat;
+                    stencilId++;
+
+                    const material = new THREE.MeshStandardMaterial({
+                        color: (pieceValue === 1) ? player1Color : player2Color,
+                        roughness: 0.5,
+                        opacity: gameSettings.pieceOpacity,
+                        transparent: isTransparent,
+                        stencilWrite: true,
+                        stencilRef: stencilId,
+                        stencilFunc: THREE.AlwaysStencilFunc,
+                        stencilZPass: THREE.ReplaceStencilOp
+                    });
                     const piece = new THREE.Mesh(pieceGeo, material);
-                    piece.position.set(x, 3 - z, y); 
+                    const targetY = 3 - z;
+                    piece.position.set(x, targetY, y);
                     scene.add(piece);
                     pieces.push(piece);
+
+                    // Animate this piece falling in if it's the one just played.
+                    if (dropCoords && gameSettings.dropAnimation &&
+                        dropCoords[0] === z && dropCoords[1] === y && dropCoords[2] === x) {
+                        piece.position.y = DROP_SPAWN_Y;
+                        activeDrops.push({
+                            mesh: piece,
+                            startY: DROP_SPAWN_Y,
+                            endY: targetY,
+                            start: performance.now(),
+                            duration: DROP_DURATION_MS
+                        });
+                    }
+
+                    // Occlusion outline: follows the piece and faces the camera (see updateOutlines).
+                    if (showOutlines) {
+                        const outlineMat = new THREE.MeshBasicMaterial({
+                            color: (pieceValue === 1) ? player1OutlineColor : player2OutlineColor,
+                            side: THREE.DoubleSide,
+                            transparent: true,
+                            depthTest: true,
+                            depthFunc: THREE.GreaterDepth,   // draw only where behind other geometry
+                            depthWrite: false,
+                            // ...and only where the front-most piece is a different piece.
+                            stencilWrite: true,
+                            stencilRef: stencilId,
+                            stencilFunc: THREE.NotEqualStencilFunc,
+                            stencilFail: THREE.KeepStencilOp,
+                            stencilZFail: THREE.KeepStencilOp,
+                            stencilZPass: THREE.KeepStencilOp
+                        });
+                        const outlineRing = new THREE.Mesh(outlineGeo, outlineMat);
+                        outlineRing.position.copy(piece.position);
+                        outlineRing.renderOrder = 999;
+                        scene.add(outlineRing);
+                        pieceOutlines.push({ ring: outlineRing, piece });
+                    }
                 }
             }
         }
@@ -512,11 +650,12 @@ async function handlePlayerMove(column) {
     logMessage('Processing your move...');
 
     // Apply move locally
+    const dropCoords = game.getLandingPosition(boardState, column);
     boardState = game.getNextState(boardState, column);
     moveHistory.push(column);
     currentMoveIndex++;
 
-    updateBoard(boardState);
+    updateBoard(boardState, dropCoords);
     updateMoveHistory(moveHistory);
 
     // Check for game over locally
@@ -576,11 +715,12 @@ async function requestAIMove() {
         const move = data.move;
 
         // Apply the move returned by the AI
+        const dropCoords = game.getLandingPosition(boardState, move);
         boardState = game.getNextState(boardState, move);
         moveHistory.push(move);
         currentMoveIndex++;
 
-        updateBoard(boardState);
+        updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
         if (!checkGameOver('AI wins!', 'Your turn! Click a column or let the AI play.')) {
@@ -636,11 +776,12 @@ async function requestMinimaxMove() {
         const data = await response.json();
         const move = data.move;
 
+        const dropCoords = game.getLandingPosition(boardState, move);
         boardState = game.getNextState(boardState, move);
         moveHistory.push(move);
         currentMoveIndex++;
 
-        updateBoard(boardState);
+        updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
         if (!checkGameOver('Minimax AI wins!', 'Your turn! Click a column or let the AI play.')) {
@@ -875,8 +1016,40 @@ async function showPreview(column) {
 
 function animate() {
     requestAnimationFrame(animate);
+    updateDrops();
+    updateOutlines();
     controls.update(); // only required if controls.enableDamping = true
     renderer.render(scene, camera);
+}
+
+// Keep each occlusion outline concentric with its piece and facing the camera, so the
+// ring stays aligned with the sphere's circular silhouette from any orbit angle.
+// (The ring is kept concentric on purpose: offsetting it toward the camera would shift
+// its projection sideways for off-centre pieces and clip into the sphere as a crescent.)
+function updateOutlines() {
+    if (pieceOutlines.length === 0) return;
+    for (const { ring, piece } of pieceOutlines) {
+        ring.position.copy(piece.position);
+        ring.quaternion.copy(camera.quaternion);
+    }
+}
+
+// Advance any in-flight piece drops. Uses an ease-in (accelerating) curve so
+// pieces fall as if pulled down by gravity.
+function updateDrops() {
+    if (activeDrops.length === 0) return;
+    const now = performance.now();
+    for (let i = activeDrops.length - 1; i >= 0; i--) {
+        const d = activeDrops[i];
+        const t = (now - d.start) / d.duration;
+        if (t >= 1) {
+            d.mesh.position.y = d.endY;
+            activeDrops.splice(i, 1);
+        } else {
+            const eased = t * t; // ease-in
+            d.mesh.position.y = d.startY + (d.endY - d.startY) * eased;
+        }
+    }
 }
 
 // --- PUZZLE MODE FUNCTIONS ---
@@ -1196,10 +1369,11 @@ async function handlePuzzleMove(column) {
 
     // Correct solver move
     logMessage('Correct!');
+    const dropCoords = game.getLandingPosition(boardState, column);
     boardState = game.getNextState(boardState, column);
     moveHistory.push(column);
     currentMoveIndex = moveHistory.length;
-    updateBoard(boardState);
+    updateBoard(boardState, dropCoords);
     updateMoveHistory(moveHistory);
     currentPuzzleSolutionIndex++;
 
@@ -1212,10 +1386,11 @@ async function handlePuzzleMove(column) {
     const opponentMove = puzzle.solution[currentPuzzleSolutionIndex];
     isRequestInProgress = true;   // lock input during the reply animation
     await new Promise(resolve => setTimeout(resolve, 450));
+    const oppDropCoords = game.getLandingPosition(boardState, opponentMove);
     boardState = game.getNextState(boardState, opponentMove);
     moveHistory.push(opponentMove);
     currentMoveIndex = moveHistory.length;
-    updateBoard(boardState);
+    updateBoard(boardState, oppDropCoords);
     updateMoveHistory(moveHistory);
     currentPuzzleSolutionIndex++;
     isRequestInProgress = false;
@@ -1240,10 +1415,11 @@ async function showSolution() {
     isRequestInProgress = true;
     for (let i = currentPuzzleSolutionIndex; i < puzzle.solution.length; i++) {
         await new Promise(resolve => setTimeout(resolve, 450));
+        const dropCoords = game.getLandingPosition(boardState, puzzle.solution[i]);
         boardState = game.getNextState(boardState, puzzle.solution[i]);
         moveHistory.push(puzzle.solution[i]);
         currentMoveIndex = moveHistory.length;
-        updateBoard(boardState);
+        updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
     }
     currentPuzzleSolutionIndex = puzzle.solution.length;
