@@ -192,18 +192,33 @@ class PuzzleBank:
     def get_random_range(self, min_mate, max_mate, exclude_ids=None):
         """Return a random puzzle whose mate length is in [min_mate, max_mate]
         (max_mate None means unbounded), preferring ids not in `exclude_ids`.
-        Puzzles are pooled across the whole range, so a category draws uniformly
-        from every mate length it spans. Returns None if the range is empty."""
+
+        Selection is TWO-STAGE: first pick a mate length uniformly at random from
+        the ones present in the range, then pick a puzzle uniformly within that
+        length. This gives every mate length the SAME chance of appearing, so a
+        file with an abundance of puzzles (e.g. lots of mate-in-1s) cannot
+        overwhelm the rarer lengths in the same category. To still avoid repeats,
+        the mate length is drawn from those that have at least one puzzle not in
+        `exclude_ids` (falling back to all present lengths only if every puzzle in
+        the range has been served). Returns None if the range is empty."""
         exclude_ids = set(exclude_ids or [])
         with self._lock:
-            pool = []
-            for k, lst in self.by_mate.items():
-                if k >= min_mate and (max_mate is None or k <= max_mate):
-                    pool.extend(lst)
-        if not pool:
+            in_range = {
+                k: list(lst) for k, lst in self.by_mate.items()
+                if lst and k >= min_mate and (max_mate is None or k <= max_mate)
+            }
+        if not in_range:
             return None
-        fresh = [p for p in pool if puzzle_id(p) not in exclude_ids]
-        chosen = random.choice(fresh if fresh else pool)
+        # Prefer mate lengths that still have an unseen puzzle so equal-per-length
+        # sampling doesn't get stuck re-serving one length's leftovers.
+        fresh_lengths = [
+            k for k, lst in in_range.items()
+            if any(puzzle_id(p) not in exclude_ids for p in lst)
+        ]
+        mate = random.choice(fresh_lengths if fresh_lengths else list(in_range))
+        bucket = in_range[mate]
+        fresh = [p for p in bucket if puzzle_id(p) not in exclude_ids]
+        chosen = random.choice(fresh if fresh else bucket)
         out = dict(chosen)
         out['id'] = puzzle_id(chosen)
         return out
@@ -253,11 +268,11 @@ class GenerationManager:
     """
 
     # Seed piece-count windows the batches rotate through. Per the user's requirement,
-    # candidate positions must have AT LEAST 34 empty cells => at most 30 pieces, so every
-    # window caps at 30 (the engine also hard-drops any candidate with >30 pieces). These
-    # emptier boards are much slower to solve exactly and yield fewer puzzles per batch, but
-    # they are where the deeper / more interesting positions come from.
-    PIECE_RANGES = [(28, 30), (26, 30), (28, 30), (24, 30), (30, 30), (26, 30)]
+    # candidate positions have 26-32 pieces (32-38 empty cells), so every window sits within
+    # [26, 32] and caps at 32 (the engine also hard-drops any candidate with >32 pieces).
+    # Slightly fuller than the old 24-30 range -- still emptier boards that hold the deeper /
+    # interesting positions, but a bit faster to solve exactly.
+    PIECE_RANGES = [(30, 32), (28, 32), (30, 32), (26, 32), (32, 32), (28, 32)]
 
     def __init__(self, bank, exe_path, output_dir, seeds=40, batch_seconds=12):
         self.bank = bank
@@ -376,7 +391,11 @@ class GenerationManager:
         with self._lock:
             self._proc = proc
         try:
-            proc.wait(timeout=self.batch_seconds + 60)
+            # Backstop kill for a runaway subprocess. The engine self-stops at `batch_seconds`
+            # BETWEEN candidates, but with the {4,8,cap} solve schedule a single candidate can
+            # keep solving to the end well past that, so allow a generous ~1000s grace before
+            # force-killing. (stop() still kills instantly when the user leaves Puzzle Mode.)
+            proc.wait(timeout=max(1000.0, self.batch_seconds + 60))
         except subprocess.TimeoutExpired:
             try:
                 proc.kill()
