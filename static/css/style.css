@@ -51,6 +51,54 @@ h1 {
     color: #ffa500;
 }
 
+/* Who else is looking at this board (see sync.js) */
+#presence-panel {
+    margin: 0 0 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #333;
+}
+
+#presence-summary {
+    font-size: 0.8em;
+    color: #999;
+    letter-spacing: 0.02em;
+}
+
+#presence-summary.offline {
+    color: #ff8a80;
+}
+
+#viewer-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-top: 6px;
+}
+
+.viewer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.75em;
+    color: #ddd;
+    padding: 2px 7px;
+    border: 1px solid #555;
+    border-radius: 10px;
+    white-space: nowrap;
+}
+
+.viewer-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+/* Log lines produced by another viewer, rather than by this browser */
+.log-remote .log-author {
+    font-weight: bold;
+}
+
 #status-message {
     font-size: 1.1em;
     min-height: 40px;
@@ -454,14 +502,15 @@ h1 {
     font-size: 0.9em;
 }
 
+/* These two must match player1Color / player2Color in main.js. */
 .move-player1 {
-    background-color: #ffdc00; /* Yellow */
-    color: black;
+    background-color: #efb87c; /* Light orange */
+    color: #2b1a0c;
 }
 
 .move-player2 {
-    background-color: #ff4136; /* Red */
-    color: #1a1a1a;
+    background-color: #9c5a2a; /* Dark orange */
+    color: #f7e6d4;            /* light text: the swatch is still too dark for black */
 }
 
 .current-move {

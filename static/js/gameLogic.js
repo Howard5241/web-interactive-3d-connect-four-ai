@@ -8,7 +8,11 @@ export class ConnectFour3D {
         this.numColumns = this.rows * this.cols; // 16
         this.numActions = this.rows * this.cols; // 16
 
-        this._winningPatterns = this._generateWinningPatterns();
+        // _winningPatterns[i] is a bitmask; _winningLines[i] holds the same four cells as
+        // [z, y, x] coordinates, so a completed pattern can be traced back to the board.
+        const { patterns, lines } = this._generateWinningPatterns();
+        this._winningPatterns = patterns;
+        this._winningLines = lines;
     }
 
     getInitialState() {
@@ -125,8 +129,28 @@ export class ConnectFour3D {
         return `${p1Hex} ${p2Hex}`;
     }
 
+    // Every four-in-a-row currently on the board, as
+    // [{ player, cells: [[z, y, x] x4] }]. A single move can complete more than one line,
+    // so all of them are returned.
+    getWinningLines(state) {
+        const found = [];
+        const boards = [[1, this._createBitboard(state, 1)], [-1, this._createBitboard(state, -1)]];
+        for (let i = 0; i < this._winningPatterns.length; i++) {
+            const pattern = this._winningPatterns[i];
+            for (const [player, bitboard] of boards) {
+                if ((bitboard & pattern) === pattern) {
+                    found.push({ player, cells: this._winningLines[i] });
+                    break;   // a cell cannot hold both players, so at most one can match
+                }
+            }
+        }
+        return found;
+    }
+
     _generateWinningPatterns() {
-        const patterns = new Set();
+        // Keyed by bitmask so the same four cells reached from opposite directions collapse
+        // to one entry, exactly as the old Set did.
+        const patterns = new Map();
         const directions = [
             [1, 0, 0], [0, 1, 0], [0, 0, 1],
             [1, 1, 0], [1, -1, 0], [1, 0, 1],
@@ -147,20 +171,22 @@ export class ConnectFour3D {
                             endZ >= 0 && endZ < this.depth) {
                             
                             let mask = 0n;
+                            const cells = [];
                             for (let i = 0; i < 4; i++) {
                                 const nx = x + i * dx;
                                 const ny = y + i * dy;
                                 const nz = z + i * dz;
                                 const pos = BigInt(nz * this.numColumns + ny * this.cols + nx);
                                 mask |= (1n << pos);
+                                cells.push([nz, ny, nx]);
                             }
-                            patterns.add(mask);
+                            if (!patterns.has(mask)) patterns.set(mask, cells);
                         }
                     }
                 }
             }
         }
-        return Array.from(patterns);
+        return { patterns: Array.from(patterns.keys()), lines: Array.from(patterns.values()) };
     }
 
     _createBitboard(state, player) {

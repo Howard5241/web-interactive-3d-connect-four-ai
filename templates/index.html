@@ -12,6 +12,10 @@
             <h1>3D Connect Four</h1>
             <button id="settings-btn">⚙️</button>
         </div>
+        <div id="presence-panel">
+            <div id="presence-summary">Connecting…</div>
+            <div id="viewer-list"></div>
+        </div>
         <p id="status-message">Click 'New Game' to begin!</p>
         <div id="button-container">
             <button id="new-game-btn">New Game</button>
@@ -80,6 +84,11 @@
                     <label for="outline-thickness-slider">Outline Thickness</label>
                     <input type="range" id="outline-thickness-slider" min="0" max="0.5" step="0.05" value="0.05">
                     <span id="outline-thickness-value">0.05</span>
+                </div>
+                <div class="slider-container">
+                    <label for="mask-opacity-slider">Occlusion Mask</label>
+                    <input type="range" id="mask-opacity-slider" min="0" max="1.0" step="0.02" value="0.38">
+                    <span id="mask-opacity-value">0.38</span>
                 </div>
                 <div class="setting-item">
                     <label for="auto-ai-toggle">Auto-play AI Move</label>

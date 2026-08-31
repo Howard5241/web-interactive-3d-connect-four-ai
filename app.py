@@ -11,6 +11,7 @@ from game_logic import ConnectFour3D
 from ai_agent import ResNet3D, MCTS
 from puzzle_bank import (PuzzleBank, GenerationManager,
                          CATEGORIES, CATEGORY_BY_KEY, category_for_mate)
+from room_state import RoomRegistry, clean_client_id
 
 # --- 1. INITIALIZATION ---
 
@@ -98,6 +99,11 @@ puzzle_bank = PuzzleBank(PUZZLE_DIR)
 generation_manager = GenerationManager(puzzle_bank, ENGINE_EXE, PUZZLE_DIR)
 print(f"Puzzle bank loaded from {PUZZLE_DIR}: {puzzle_bank.counts()} "
       f"(total {puzzle_bank.total()})")
+
+
+# --- 2c. SHARED ROOMS (one board for everyone looking at the site) ---
+
+rooms = RoomRegistry()
 
 
 # --- 3. DEFINE API ROUTES (MODIFIED SECTION) ---
@@ -211,6 +217,70 @@ def set_state():
     session['move_history'] = move_history
 
     return jsonify({"message": "State updated successfully."})
+
+
+# --- SHARED ROOM ENDPOINTS ---
+#
+# The board every viewer sees lives in the room, not in the browser. Clients poll
+# GET for changes and POST their own; see room_state.py for the protocol.
+
+def _room_for(room_id, client_id):
+    """Resolve the room and register the caller as a live viewer."""
+    room = rooms.get(room_id)
+    room.touch(clean_client_id(client_id))
+    return room
+
+
+@app.route('/api/room/state', methods=['GET'])
+def room_get_state():
+    """Poll for room changes; also the presence heartbeat that keeps the caller listed."""
+    try:
+        room = _room_for(request.args.get('room'), request.args.get('client_id'))
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify(room.snapshot(
+        since=request.args.get('since', type=int),
+        log_since=request.args.get('log_since', type=int),
+    ))
+
+
+@app.route('/api/room/state', methods=['POST'])
+def room_push_state():
+    """Apply a patch to the shared state.
+
+    A patch sent with `base_version` is only applied if the room is still on that
+    version, so simultaneous moves from two viewers cannot both land: the loser gets
+    409 plus the state it missed.
+    """
+    data = request.get_json(silent=True) or {}
+    try:
+        room = _room_for(data.get('room'), data.get('client_id'))
+        accepted, snapshot = room.apply_patch(
+            data.get('patch') or {},
+            clean_client_id(data.get('client_id')),
+            base_version=data.get('base_version'),
+            log=data.get('log'),
+            log_since=data.get('log_since'),
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    snapshot['accepted'] = accepted
+    return jsonify(snapshot), (200 if accepted else 409)
+
+
+@app.route('/api/room/leave', methods=['POST'])
+def room_leave():
+    """Drop a viewer from the presence list as its tab closes (sent via sendBeacon,
+    which posts text/plain, hence force=True)."""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        client_id = clean_client_id(data.get('client_id'))
+        rooms.get(data.get('room')).leave(client_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    return jsonify({"left": True})
 
 
 # --- PUZZLE MODE ENDPOINTS ---

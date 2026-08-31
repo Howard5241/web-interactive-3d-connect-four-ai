@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { ConnectFour3D } from './gameLogic.js';
+import { RoomSync } from './sync.js';
 
 // --- GLOBAL VARIABLES ---
 let scene, camera, renderer, controls;
@@ -11,22 +13,43 @@ let pieces = []; // To hold the visible game pieces
 let ghostPieces = []; // To hold the ghost pieces for planning
 let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
-let player1Color = 0xffdc00; // Yellow
-let player2Color = 0xf50000; // Red
-let player1GhostColor = 0xfff19c; // Yellow (ghost)
-let player2GhostColor = 0xff7575; // Red (ghost)
-let player1OutlineColor = 0xfff27a; // Yellow (occlusion outline)
-let player2OutlineColor = 0xff6b6b; // Red (occlusion outline)
+// Player colours run light-orange (a milky coffee) vs dark-orange (a roasted bean).
+// Ghost and outline/mask variants are lightened so they stay legible against both the
+// dark background and the piece they sit on.
+let player1Color = 0xefb87c; // Light orange
+let player2Color = 0x9c5a2a; // Dark orange
+let player1GhostColor = 0xf7d9b4; // Light orange (ghost)
+let player2GhostColor = 0xc0824c; // Dark orange (ghost)
+let player1OutlineColor = 0xffe6c2; // Light orange (occlusion outline / mask)
+let player2OutlineColor = 0xd99760; // Dark orange (occlusion outline / mask)
+const PLAYER1_NAME = 'Light orange';
+const PLAYER2_NAME = 'Dark orange';
 let ghostPlayer1Material, ghostPlayer2Material;
 
-// Camera-facing outline rings, shown only where a piece is hidden behind another.
-let pieceOutlines = []; // [{ ring, piece }]
+// Occlusion overlays, one entry per piece on the board:
+//   mask - a copy of the piece's own geometry, parented to the piece, drawn semi-
+//          transparently wherever the piece is hidden behind another piece. Because it
+//          reuses the piece geometry it covers exactly the blocked region, at any angle.
+//   ring - the thin camera-facing outline at the piece's silhouette (null when the
+//          outline-thickness setting is 0).
+// Both are shown only while most of the piece is actually blocked (see updateOcclusionOverlays),
+// and they fade in and out rather than popping.
+let pieceOverlays = []; // [{ piece, mask, ring, key, fade }]
+
+// How far each cell's overlay has faded in, keyed by cell index (z * 16 + y * 4 + x).
+// updateBoard throws away and rebuilds every overlay object -- including on something as
+// incidental as nudging a settings slider -- so the fade has to survive outside them, or
+// every rebuild would restart the animation from nothing.
+let occlusionFade = new Map();
+
+// Bars drawn through each completed four-in-a-row, so the winning line is obvious.
+let winHighlights = [];
 
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
 let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE, DROP_ANIMATION_TOGGLE;
-let OUTLINE_THICKNESS_SLIDER, OUTLINE_THICKNESS_VALUE;
+let OUTLINE_THICKNESS_SLIDER, OUTLINE_THICKNESS_VALUE, MASK_OPACITY_SLIDER, MASK_OPACITY_VALUE;
 
 let gameSettings = {
     pieceSize: 1.0,
@@ -34,7 +57,8 @@ let gameSettings = {
     autoAIMove: false,
     autoMinimaxMove: false,
     dropAnimation: true,
-    outlineThickness: 0.05   // occlusion outline width, as a fraction of the piece radius (0 = off)
+    outlineThickness: 0.05,  // occlusion outline width, as a fraction of the piece radius (0 = off)
+    maskOpacity: 0.38        // occlusion mask strength (0 = off)
 };
 
 // --- DROP ANIMATION ---
@@ -42,8 +66,34 @@ let activeDrops = [];            // in-flight piece drops: { mesh, startY, endY,
 const DROP_SPAWN_Y = 6.5;        // fixed height above the grid where a played piece spawns
 const DROP_DURATION_MS = 450;    // time for a piece to fall to its cell
 
+// --- PIECE MODEL ---
+// Pieces are drawn from an FBX model. The loaded geometry is normalised to a unit
+// bounding sphere centred on the origin, so a mesh built from it and scaled by the
+// piece-size setting occupies exactly the space the old SphereGeometry did.
+// That keeps the drop animation, the stencil occlusion outlines and the piece-size
+// setting working unchanged. Until the FBX loads (and if it fails) this stays a
+// unit sphere, which reproduces the previous look exactly.
+const PIECE_MODEL_URL = '/static/models/Piece.fbx';
+let pieceBaseGeo = new THREE.SphereGeometry(1, 32, 32);
+let pieceModelLoaded = false;
+// The largest half-extent of the normalised geometry, i.e. how far the model actually
+// reaches from its centre. The bounding SPHERE radius is 1 by construction, but the bead
+// does not fill that sphere -- it only reaches ~0.85 -- so a circle of radius 1 would
+// float outside its silhouette. This is the radius the outline ring and the occlusion
+// coverage test use. 1.0 is exact for the fallback sphere.
+let pieceSilhouetteRadius = 1.0;
+
 let moveHistory = [];
 let currentMoveIndex = 0;
+
+// --- SHARED SESSION (see sync.js) ---
+// The board is not private to this tab: it belongs to a room on the server that every
+// viewer of the site reads from and writes to. Anything that changes what is on the
+// board is pushed there; anything that arrives from there is applied here.
+let sync = null;
+let applyingRemote = false;   // true while a remote state is being applied: suppresses pushes
+let engineLock = null;        // another viewer's in-progress AI/minimax search, or null
+let viewers = [];             // everyone currently looking at this board
 
 // --- PUZZLE MODE VARIABLES ---
 let isPuzzleMode = false;
@@ -65,6 +115,66 @@ let generationPollTimer = null;  // interval id while a background generation ru
 let generationRunning = false;   // is the engine currently auto-generating?
 let lastCounts = {};             // most recent per-mate bank counts
 let lastCategoryCounts = {};     // most recent per-category bank counts
+
+// A 1x1 transparent PNG. The FBX references its source textures by absolute Windows
+// path (C:\Users\...\clay_floor_001_*.jpg), which the browser obviously cannot fetch,
+// so every texture request is redirected here. As exported, this file's texture
+// connections are ones FBXLoader skips anyway ("undefined map is not supported"), so
+// nothing is fetched today -- but a re-export with proper connections would otherwise
+// start 404ing. We only ever want the geometry: the piece colour comes from the
+// per-player material built in updateBoard.
+const BLANK_TEXTURE_URL =
+    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+
+async function loadPieceModel(url) {
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier((requested) => (requested === url ? url : BLANK_TEXTURE_URL));
+
+    const root = await new FBXLoader(manager).loadAsync(url);
+    root.updateMatrixWorld(true);
+
+    let source = null;
+    root.traverse((o) => { if (o.isMesh && !source) source = o; });
+    if (!source) throw new Error('no mesh found in ' + url);
+
+    const geo = source.geometry.clone();
+    // Bake the node transform: this FBX carries a non-uniform "Lcl Scaling" of
+    // (0.0045, 0.014, 0.0045), so the raw geometry is ~26000 units across and
+    // anisotropically scaled. applyMatrix4 transforms the normals correctly too.
+    geo.applyMatrix4(source.matrixWorld);
+    if (!geo.attributes.normal) geo.computeVertexNormals();
+
+    // Recentre (the model's pivot sits at its base, not its middle) and normalise to a
+    // unit bounding sphere. Using the bounding SPHERE rather than the box guarantees no
+    // vertex ever reaches past radius 1, so a piece can never grow larger than the
+    // sphere it replaces and neighbouring cells (1.0 apart) still cannot intersect.
+    geo.computeBoundingSphere();
+    const { center, radius } = geo.boundingSphere;
+    geo.translate(-center.x, -center.y, -center.z);
+    geo.scale(1 / radius, 1 / radius, 1 / radius);
+    geo.computeBoundingSphere();
+
+    // How far the model really reaches from its centre. Recentring used the bounding
+    // sphere's centre, so the box is not perfectly symmetric -- take the largest |extent|.
+    geo.computeBoundingBox();
+    const bb = geo.boundingBox;
+    pieceSilhouetteRadius = Math.max(
+        Math.abs(bb.min.x), Math.abs(bb.max.x),
+        Math.abs(bb.min.y), Math.abs(bb.max.y),
+        Math.abs(bb.min.z), Math.abs(bb.max.z));
+
+    pieceBaseGeo.dispose();
+    pieceBaseGeo = geo;
+    pieceModelLoaded = true;
+}
+
+// Build a piece mesh at the current piece-size setting. `pieceBaseGeo` is shared by
+// every piece, so all 64 pieces cost one geometry upload.
+function createPieceMesh(material) {
+    const mesh = new THREE.Mesh(pieceBaseGeo, material);
+    mesh.scale.setScalar(0.4 * gameSettings.pieceSize);
+    return mesh;
+}
 
 // --- INITIALIZATION ---
 
@@ -92,6 +202,8 @@ function init() {
     DROP_ANIMATION_TOGGLE = document.getElementById('drop-animation-toggle');
     OUTLINE_THICKNESS_SLIDER = document.getElementById('outline-thickness-slider');
     OUTLINE_THICKNESS_VALUE = document.getElementById('outline-thickness-value');
+    MASK_OPACITY_SLIDER = document.getElementById('mask-opacity-slider');
+    MASK_OPACITY_VALUE = document.getElementById('mask-opacity-value');
 
     // Puzzle Mode Elements
     const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
@@ -173,6 +285,7 @@ function init() {
 
     // Draw Board Structure
     drawBoardGrid();
+    drawColumnPoles();
     drawCornerLabels();
     createClickTargets();
 
@@ -229,6 +342,13 @@ function init() {
         updateBoard(boardState);
     });
 
+    MASK_OPACITY_SLIDER.addEventListener('input', (event) => {
+        const newOpacity = parseFloat(event.target.value);
+        gameSettings.maskOpacity = newOpacity;
+        MASK_OPACITY_VALUE.textContent = newOpacity.toFixed(2);
+        updateBoard(boardState);
+    });
+
     AUTO_AI_TOGGLE.addEventListener('change', (event) => {
         gameSettings.autoAIMove = event.target.checked;
         if (gameSettings.autoAIMove) {
@@ -254,6 +374,14 @@ function init() {
 
     window.addEventListener('keydown', handleKeyDown);
     MOVE_INPUT.addEventListener('keydown', handleMoveInputChange);
+
+    if (!pieceModelLoaded) {
+        logMessage('Piece model unavailable — using default spheres.');
+    }
+
+    // Join the shared board. Everything above is per-viewer (camera, settings, the
+    // scene itself); from here on the position is the room's, not this tab's.
+    initSync();
 
     // Start Animation Loop
     animate();
@@ -295,6 +423,15 @@ async function copyHexCode() {
 
 // --- 3D BOARD DRAWING --- 
 
+// The board is modelled on the real-world game: a flat 4x4 base plate with a vertical
+// pole rising out of the centre of each square. Pieces are beads that thread onto a
+// pole and slide down, so the board needs no wireframe box to imply the third
+// dimension -- the poles themselves show where each column is and how tall it is.
+const BASE_PLANE_Y = -0.5;   // the base plate, half a cell below the bottom layer of pieces
+const POLE_TOP_Y = 3.3;      // just clear of the top bead, whose crown reaches y = 3.31
+const POLE_RADIUS = 0.04;    // the beads' narrowest bore is 0.142 at default piece size
+
+// Just the 4x4 grid of the base plate, in the horizontal plane.
 function drawBoardGrid() {
     // depthWrite:false keeps the grid out of the depth buffer, so the occlusion
     // outlines (which draw where a piece is behind existing depth) are triggered
@@ -306,19 +443,50 @@ function drawBoardGrid() {
     const offset = -0.5;
 
     for (let i = 0; i <= size; i++) {
-        // Horizontal lines (along X and Z axes for each layer)
-        for (let j = 0; j <= size; j++) {
-            points.push(new THREE.Vector3(offset, offset + i, offset + j));
-            points.push(new THREE.Vector3(offset + size, offset + i, offset + j));
-            points.push(new THREE.Vector3(offset + i, offset, offset + j));
-            points.push(new THREE.Vector3(offset + i, offset + size, offset + j));
-            points.push(new THREE.Vector3(offset + i, offset + j, offset));
-            points.push(new THREE.Vector3(offset + i, offset + j, offset + size));
-        }
+        // Lines running along X, one per grid row...
+        points.push(new THREE.Vector3(offset, BASE_PLANE_Y, offset + i));
+        points.push(new THREE.Vector3(offset + size, BASE_PLANE_Y, offset + i));
+        // ...and along Z, one per grid column.
+        points.push(new THREE.Vector3(offset + i, BASE_PLANE_Y, offset));
+        points.push(new THREE.Vector3(offset + i, BASE_PLANE_Y, offset + size));
     }
     const geometry = new THREE.BufferGeometry().setFromPoints(points);
     const line = new THREE.LineSegments(geometry, material);
     scene.add(line);
+}
+
+// One upright pole per column, rising from the centre of its square on the base plate.
+// Cell (col, row) centres on x = col, z = row -- the same mapping used by the pieces and
+// by createClickTargets.
+function drawColumnPoles() {
+    const height = POLE_TOP_Y - BASE_PLANE_Y;
+    // Shared by all 16 poles.
+    const geometry = new THREE.CylinderGeometry(POLE_RADIUS, POLE_RADIUS, height, 16);
+    // The poles must be drawn AFTER the occlusion outlines. They are solid and write
+    // depth, so drawing them first makes any pole standing in front of a piece satisfy
+    // that piece's outline GreaterDepth test, lighting up a ring around a piece nothing
+    // is really hiding. Ordering after the outlines keeps them a piece-vs-piece signal.
+    //
+    // renderOrder alone cannot do this: three.js draws the whole opaque list before the
+    // whole transparent list and only sorts by renderOrder *within* a list, and the
+    // outline rings are transparent. So the poles opt into the transparent list at full
+    // opacity -- visually identical, but now renderOrder 1000 really does put them last.
+    const material = new THREE.MeshStandardMaterial({
+        color: 0x8a8a8a,
+        roughness: 0.6,
+        metalness: 0.1,
+        transparent: true,
+        opacity: 1.0
+    });
+
+    for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 4; col++) {
+            const pole = new THREE.Mesh(geometry, material);
+            pole.position.set(col, BASE_PLANE_Y + height / 2, row);
+            pole.renderOrder = 1000;
+            scene.add(pole);
+        }
+    }
 }
 
 // Build a camera-facing text label (a Sprite always faces the camera).
@@ -344,6 +512,10 @@ function makeTextSprite(text) {
     const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false, depthWrite: false });
     const sprite = new THREE.Sprite(material);
     sprite.scale.set(0.9, 0.9, 0.9);
+    // depthTest:false already means "always on top", but that only holds against
+    // geometry drawn earlier. The column poles render at 1000, so the labels have to
+    // sit above them to stay readable rather than be painted over.
+    sprite.renderOrder = 2000;
     return sprite;
 }
 
@@ -397,9 +569,16 @@ function updateBoard(boardState, dropCoords = null) {
     pieces.forEach(p => scene.remove(p));
     pieces = [];
 
-    // Clear occlusion outlines (rebuilt alongside the pieces below)
-    pieceOutlines.forEach(o => scene.remove(o.ring));
-    pieceOutlines = [];
+    // Clear occlusion overlays (rebuilt alongside the pieces below). The masks are
+    // children of their piece and were removed with it above; only the rings are
+    // scene-level, since they have to be re-oriented to face the camera each frame.
+    pieceOverlays.forEach(o => { if (o.ring) scene.remove(o.ring); });
+    pieceOverlays = [];
+
+    // Rebuild the fade table from scratch, seeding each new overlay from the outgoing one
+    // for the same cell. Anything not carried over (a cell emptied by an undo) is dropped.
+    const previousFade = occlusionFade;
+    occlusionFade = new Map();
 
     clearGhostPieces();
 
@@ -409,8 +588,11 @@ function updateBoard(boardState, dropCoords = null) {
         previewPiece = null;
     }
 
-    const pieceRadius = 0.4 * gameSettings.pieceSize;
-    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
+    const pieceScale = 0.4 * gameSettings.pieceSize;
+    // Where the piece's image actually ends on screen. Not the same as pieceScale: the
+    // model only reaches `pieceSilhouetteRadius` (~0.85) of its bounding sphere, so a
+    // ring drawn at pieceScale would hang visibly outside the bead.
+    const silhouetteRadius = pieceSilhouetteRadius * pieceScale;
 
     const isTransparent = gameSettings.pieceOpacity < 1.0;
 
@@ -421,8 +603,9 @@ function updateBoard(boardState, dropCoords = null) {
     const outlineThickness = gameSettings.outlineThickness;
     const showOutlines = outlineThickness > 0;
     const outlineGeo = showOutlines
-        ? new THREE.RingGeometry(Math.max(0, pieceRadius * (1 - outlineThickness)), pieceRadius, 48)
+        ? new THREE.RingGeometry(Math.max(0, silhouetteRadius * (1 - outlineThickness)), silhouetteRadius, 48)
         : null;
+    const showMasks = gameSettings.maskOpacity > 0;
 
     // Each piece stamps a unique id (1..64) into the stencil buffer wherever it is the
     // front-most surface. A piece's outline then draws only where the front-most piece
@@ -446,7 +629,7 @@ function updateBoard(boardState, dropCoords = null) {
                         stencilFunc: THREE.AlwaysStencilFunc,
                         stencilZPass: THREE.ReplaceStencilOp
                     });
-                    const piece = new THREE.Mesh(pieceGeo, material);
+                    const piece = createPieceMesh(material);
                     const targetY = 3 - z;
                     piece.position.set(x, targetY, y);
                     scene.add(piece);
@@ -465,16 +648,23 @@ function updateBoard(boardState, dropCoords = null) {
                         });
                     }
 
-                    // Occlusion outline: follows the piece and faces the camera (see updateOutlines).
+                    const overlayColor = (pieceValue === 1) ? player1OutlineColor : player2OutlineColor;
+
+                    // Occlusion outline: a thin camera-facing rim at the piece's silhouette,
+                    // repositioned each frame (see updateOcclusionOverlays). Drawn BEFORE the
+                    // mask, because the mask rewrites the stencil buffer as it goes (below)
+                    // and would otherwise suppress this ring. Both are the same colour, so
+                    // the mask blending over the ring leaves it looking unchanged.
+                    let outlineRing = null;
                     if (showOutlines) {
                         const outlineMat = new THREE.MeshBasicMaterial({
-                            color: (pieceValue === 1) ? player1OutlineColor : player2OutlineColor,
+                            color: overlayColor,
                             side: THREE.DoubleSide,
                             transparent: true,
+                            opacity: 0,          // driven by the fade in updateOcclusionOverlays
                             depthTest: true,
-                            depthFunc: THREE.GreaterDepth,   // draw only where behind other geometry
+                            depthFunc: THREE.GreaterDepth,
                             depthWrite: false,
-                            // ...and only where the front-most piece is a different piece.
                             stencilWrite: true,
                             stencilRef: stencilId,
                             stencilFunc: THREE.NotEqualStencilFunc,
@@ -482,16 +672,149 @@ function updateBoard(boardState, dropCoords = null) {
                             stencilZFail: THREE.KeepStencilOp,
                             stencilZPass: THREE.KeepStencilOp
                         });
-                        const outlineRing = new THREE.Mesh(outlineGeo, outlineMat);
+                        outlineRing = new THREE.Mesh(outlineGeo, outlineMat);
                         outlineRing.position.copy(piece.position);
-                        outlineRing.renderOrder = 999;
+                        outlineRing.renderOrder = 997;
+                        outlineRing.visible = false;
                         scene.add(outlineRing);
-                        pieceOutlines.push({ ring: outlineRing, piece });
+                    }
+
+                    // Occlusion mask: a second copy of the piece's own geometry, parented
+                    // to the piece so it shares its transform exactly (including while the
+                    // piece is falling). Drawn with GreaterDepth it appears only on the
+                    // fragments where the piece lost the depth test, i.e. precisely the
+                    // region another piece is hiding -- the whole blocked area, in the
+                    // model's true silhouette, from every camera angle.
+                    //
+                    // Being geometrically identical to the piece, its depth values are
+                    // exactly equal wherever the piece is visible, and GreaterDepth is a
+                    // strict test, so it can never bleed over the unobstructed part.
+                    let mask = null;
+                    if (showMasks) {
+                        const maskMat = new THREE.MeshBasicMaterial({
+                            color: overlayColor,
+                            transparent: true,
+                            opacity: 0,          // ramps up to gameSettings.maskOpacity as it fades in
+                            depthTest: true,
+                            depthFunc: THREE.GreaterDepth,   // draw only where behind other geometry
+                            depthWrite: false,
+                            // ...and only where the front-most piece is a different piece, so a
+                            // piece's own near side never masks its own far side.
+                            stencilWrite: true,
+                            stencilRef: stencilId,
+                            stencilFunc: THREE.NotEqualStencilFunc,
+                            stencilFail: THREE.KeepStencilOp,
+                            stencilZFail: THREE.KeepStencilOp,
+                            // The bead is a torus with a bore, so a single camera ray can cross
+                            // TWO front-facing surfaces of it -- the outer shell and the far wall
+                            // of the hole. Both pass GreaterDepth, so the alpha blend happened
+                            // twice over the middle of the piece and that band came out lighter
+                            // than the rest. Stamping this piece's own id on every fragment that
+                            // gets drawn makes the second crossing fail its own NotEqual test, so
+                            // each pixel is blended exactly once.
+                            //
+                            // This is safe for the other pieces' masks: the only id a mask can
+                            // write is its own, and a pixel carrying piece P's id is by definition
+                            // a pixel where P is hidden -- so wherever the stamp differs from what
+                            // the piece pass left behind, P was not the front-most surface there,
+                            // and any mask that now passes the stencil test still has to clear
+                            // GreaterDepth against the true occluder's depth.
+                            stencilZPass: THREE.ReplaceStencilOp
+                        });
+                        mask = new THREE.Mesh(pieceBaseGeo, maskMat);
+                        mask.renderOrder = 998;
+                        mask.visible = false;   // switched on by updateOcclusionOverlays
+                        piece.add(mask);
+                    }
+
+                    if (mask || outlineRing) {
+                        const key = z * 16 + y * 4 + x;
+                        const overlay = { piece, mask, ring: outlineRing, key, fade: previousFade.get(key) || 0 };
+                        occlusionFade.set(key, overlay.fade);
+                        // Seed the meshes from the carried-over fade, so a rebuild that lands
+                        // mid-fade does not blank the overlay for a frame.
+                        applyOverlayFade(overlay);
+                        pieceOverlays.push(overlay);
                     }
                 }
             }
         }
     }
+
+    updateWinHighlight(boardState, silhouetteRadius);
+}
+
+// --- WIN HIGHLIGHT ---
+
+const WIN_LINE_COLOR = 0x4fd1ff;   // cyan: neither player's colour, so it reads as an annotation
+const WIN_LINE_RADIUS = 0.075;     // half-thickness of the bar
+const WIN_LINE_OPACITY = 0.9;
+
+const _winAxis = new THREE.Vector3();
+const _winUp = new THREE.Vector3(0, 1, 0);
+
+function clearWinHighlight() {
+    winHighlights.forEach(m => {
+        scene.remove(m);
+        m.geometry.dispose();
+        m.material.dispose();
+    });
+    winHighlights = [];
+}
+
+// Draw a thick bar through every four-in-a-row on the board. A move can complete more
+// than one line at once, so all of them get a bar.
+//
+// `reach` is how far past the two end pieces' centres the bar should extend -- the piece
+// silhouette radius, so the bar spans the full run rather than stopping at the middle of
+// the outermost beads.
+function updateWinHighlight(state, reach) {
+    clearWinHighlight();
+    if (!game) return;
+
+    const lines = game.getWinningLines(state);
+    if (lines.length === 0) return;
+
+    for (const { cells } of lines) {
+        // Board [z, y, x] maps to world (x, 3 - z, y), the same mapping the pieces use.
+        const from = cellToWorld(cells[0]);
+        const to = cellToWorld(cells[cells.length - 1]);
+
+        _winAxis.copy(to).sub(from);
+        const span = _winAxis.length();
+        _winAxis.normalize();
+
+        // A capsule is a cylinder with hemispherical caps, so the bar ends in a dome over
+        // the outermost bead instead of a flat disc. Its total length is body + 2 * radius,
+        // hence the radius subtracted here.
+        const body = Math.max(0.001, span + 2 * reach - 2 * WIN_LINE_RADIUS);
+        const geometry = new THREE.CapsuleGeometry(WIN_LINE_RADIUS, body, 6, 16);
+        const material = new THREE.MeshBasicMaterial({
+            color: WIN_LINE_COLOR,
+            transparent: true,
+            opacity: WIN_LINE_OPACITY,
+            // The bar runs through the centres of the beads, so with a normal depth test it
+            // would be buried inside them and only visible in the gaps. Drawing it on top
+            // instead makes it read as a highlight laid over the winning run.
+            depthTest: false,
+            depthWrite: false
+        });
+
+        const bar = new THREE.Mesh(geometry, material);
+        bar.position.copy(from).add(to).multiplyScalar(0.5);
+        // CapsuleGeometry is built along +Y; rotate that axis onto the line's direction.
+        bar.quaternion.setFromUnitVectors(_winUp, _winAxis);
+        // Above the poles (1000) but below the corner labels (2000).
+        bar.renderOrder = 1500;
+        // Hold it back until the winning piece has finished dropping (see updateDrops).
+        bar.visible = activeDrops.length === 0;
+        scene.add(bar);
+        winHighlights.push(bar);
+    }
+}
+
+function cellToWorld([z, y, x]) {
+    return new THREE.Vector3(x, 3 - z, y);
 }
 
 function updateMoveHistory(newMoveHistory) {
@@ -514,6 +837,274 @@ function updateMoveHistory(newMoveHistory) {
 }
 
 
+// --- SHARED SESSION ---
+
+function initSync() {
+    sync = new RoomSync({
+        onState: applyRemoteState,
+        onPresence: renderPresence,
+        onLog: renderRemoteLog,
+        onConnection: renderConnection,
+    });
+    sync.start();
+}
+
+/** Everything about the local view that other viewers should see too. */
+function fullSharedState() {
+    return {
+        mode: isPuzzleMode ? 'puzzle' : 'game',
+        moves: moveHistory,
+        view_index: currentMoveIndex,
+        ghosts: ghostCells(),
+        puzzle: isPuzzleMode ? sharedPuzzleState() : null,
+        progress: isPuzzleMode ? sharedProgress() : null,
+    };
+}
+
+// The puzzle set: where it came from and the puzzles themselves. Changes only when a
+// new puzzle is fetched or a file is loaded, which is why the progress through it is
+// tracked separately -- an uploaded file can hold hundreds of puzzles.
+function sharedPuzzleState() {
+    return { source: puzzleSource, puzzles, category: selectedCategory };
+}
+
+function sharedProgress() {
+    return {
+        index: currentPuzzleIndex,
+        solution_index: currentPuzzleSolutionIndex,
+        solved: currentPuzzleSolved,
+    };
+}
+
+/**
+ * Publish a change so the other viewers see it.
+ * `expect` makes the push conditional on nobody having changed the board since we last
+ * heard from the server -- use it for anything that adds a move, so two people clicking
+ * at once cannot both play.
+ */
+async function pushShared(patch, { expect = false, log = null } = {}) {
+    if (!sync || applyingRemote) return { ok: true };   // remote changes are not echoed back
+    const result = await sync.push(patch, { expect, log });
+    if (result.conflict) {
+        // sync has already applied the state we missed; our optimistic move is gone.
+        logMessage('Another viewer moved first — the board has been resynced.');
+    }
+    return result;
+}
+
+/** The board as the rest of the room should see it after a local move. */
+function pushBoard({ log = null, expect = true } = {}) {
+    return pushShared({
+        mode: isPuzzleMode ? 'puzzle' : 'game',
+        moves: moveHistory,
+        view_index: currentMoveIndex,
+        ghosts: ghostCells(),
+        progress: isPuzzleMode ? sharedProgress() : null,
+    }, { expect, log });
+}
+
+/** Claim/release the engine so two viewers cannot start a search at the same time. */
+function setEngineBusy(what) {
+    return pushShared({ busy: what ? { what } : null });
+}
+
+function engineBusyElsewhere() {
+    return engineLock !== null;
+}
+
+// Apply a board sent by another viewer. Everything here mirrors what the local move
+// paths do, minus the pushes -- `applyingRemote` keeps this from bouncing back out.
+function applyRemoteState(state) {
+    if (!state || !game) return;
+    applyingRemote = true;
+    try {
+        updateEngineLock(state.busy);
+
+        const moves = Array.isArray(state.moves) ? state.moves : [];
+        const viewIndex = Math.max(0, Math.min(state.view_index ?? moves.length, moves.length));
+
+        // Polling delivers whole snapshots, and most of them describe the board already
+        // on screen -- our own move coming back, or somebody claiming the engine. Redrawing
+        // for those would restart drop animations and flicker, so compare first.
+        if (boardMatchesLocal(state, moves, viewIndex)) {
+            refreshControls();
+            return;
+        }
+
+        if (state.mode === 'puzzle' && state.puzzle) {
+            const p = state.puzzle;
+            const progress = state.progress || {};
+            if (!isPuzzleMode) enterPuzzleMode();   // resets currentPuzzleIndex, so go first
+            puzzles = Array.isArray(p.puzzles) ? p.puzzles : [];
+            puzzleSource = p.source || null;
+            if (p.category) selectedCategory = p.category;
+            currentPuzzleIndex = progress.index || 0;
+            currentPuzzleSolutionIndex = progress.solution_index || 0;
+            currentPuzzleSolved = !!progress.solved;
+            updatePuzzleInfo();
+        } else if (isPuzzleMode) {
+            leavePuzzleUI();
+        }
+
+        const dropCoords = remoteDropCoords(moves, viewIndex);
+
+        moveHistory = moves;
+        currentMoveIndex = viewIndex;
+        boardState = game.getStateFromMoves(moves.slice(0, viewIndex)).state;
+
+        updateBoard(boardState, dropCoords);       // clears ghosts...
+        renderGhosts(state.ghosts || []);          // ...so redraw the shared ones
+        updateMoveHistory(moveHistory);
+        refreshControls();
+    } finally {
+        applyingRemote = false;
+    }
+}
+
+// Does this shared state describe exactly what this tab is already showing?
+function boardMatchesLocal(state, moves, viewIndex) {
+    if ((state.mode === 'puzzle') !== isPuzzleMode) return false;
+    if (viewIndex !== currentMoveIndex) return false;
+    if (moves.length !== moveHistory.length) return false;
+    if (!moves.every((m, i) => m === moveHistory[i])) return false;
+
+    const mine = ghostCells();
+    const theirs = state.ghosts || [];
+    if (theirs.length !== mine.length) return false;
+    if (!theirs.every((g, i) => g.x === mine[i].x && g.y === mine[i].y
+                             && g.z === mine[i].z && g.player === mine[i].player)) return false;
+
+    if (isPuzzleMode) {
+        const p = state.progress || {};
+        if ((p.index || 0) !== currentPuzzleIndex) return false;
+        if ((p.solution_index || 0) !== currentPuzzleSolutionIndex) return false;
+        if (!!p.solved !== currentPuzzleSolved) return false;
+        // Two different puzzles can share a history, so compare the line to solve too.
+        const here = puzzles[currentPuzzleIndex];
+        const there = (state.puzzle && state.puzzle.puzzles || [])[currentPuzzleIndex];
+        if (JSON.stringify(here && here.solution) !== JSON.stringify(there && there.solution)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Track who, if anyone, is holding the server's engine, and say so once.
+function updateEngineLock(busy) {
+    const lock = (busy && busy.client !== sync.clientId) ? busy : null;
+    const wasHeldBy = engineLock && engineLock.client;
+    engineLock = lock;
+    if (lock && lock.client !== wasHeldBy) {
+        const who = viewers.find(v => v.id === lock.client);
+        const engine = lock.what === 'minimax' ? 'the minimax engine' : 'the AI';
+        logMessage(`${who ? who.name : 'Another viewer'} is running ${engine}…`);
+    }
+}
+
+// If the incoming moves are ours plus exactly one more, that one move was just played
+// by someone else and deserves the drop animation rather than appearing out of nowhere.
+function remoteDropCoords(moves, viewIndex) {
+    if (viewIndex !== moves.length) return null;
+    if (moves.length !== moveHistory.length + 1) return null;
+    if (currentMoveIndex !== moveHistory.length) return null;
+    if (!moveHistory.every((m, i) => m === moves[i])) return null;
+
+    const before = game.getStateFromMoves(moves.slice(0, -1)).state;
+    return game.getLandingPosition(before, moves[moves.length - 1]);
+}
+
+// Ghost (planning) pieces travel as world coordinates, which is exactly what a mesh
+// needs and survives a board rebuild losing the meshes themselves.
+function ghostCells() {
+    return ghostPieces.map(p => ({
+        x: p.position.x,
+        y: p.position.y,
+        z: p.position.z,
+        player: p.material === ghostPlayer1Material ? 1 : -1,
+    }));
+}
+
+function renderGhosts(cells) {
+    clearGhostPieces();
+    cells.forEach(c => {
+        const piece = createPieceMesh(c.player === 1 ? ghostPlayer1Material : ghostPlayer2Material);
+        piece.position.set(c.x, c.y, c.z);
+        piece.userData.isGhost = true;
+        scene.add(piece);
+        ghostPieces.push(piece);
+    });
+}
+
+// Put the buttons in the right state for the board as it now stands. checkGameOver does
+// this for locally-driven moves; a board that arrived from another viewer needs the same
+// treatment without re-announcing the result in the log.
+function refreshControls() {
+    const [, isTerminal] = game.getValueAndTerminated(boardState);
+    if (isTerminal || isPuzzleMode) {
+        setButtonsDisabled(true);
+        NEW_GAME_BTN.disabled = isRequestInProgress;
+        UNDO_BTN.disabled = true;
+    } else {
+        setButtonsDisabled(isRequestInProgress || currentMoveIndex !== moveHistory.length);
+        NEW_GAME_BTN.disabled = isRequestInProgress;
+    }
+}
+
+// --- PRESENCE & SHARED LOG ---
+
+function renderPresence(clients) {
+    viewers = clients;
+    const list = document.getElementById('viewer-list');
+    if (!list) return;
+    list.innerHTML = '';
+    clients.forEach(c => {
+        const chip = document.createElement('span');
+        chip.className = 'viewer-chip';
+        chip.style.borderColor = c.color;
+        const dot = document.createElement('span');
+        dot.className = 'viewer-dot';
+        dot.style.backgroundColor = c.color;
+        chip.appendChild(dot);
+        chip.appendChild(document.createTextNode(
+            c.id === sync.clientId ? `${c.name} (you)` : c.name));
+        list.appendChild(chip);
+    });
+    renderConnection(sync.online ? 'online' : 'offline');
+}
+
+function renderConnection(status) {
+    const label = document.getElementById('presence-summary');
+    if (!label) return;
+    if (status === 'offline') {
+        label.textContent = '⚠ Disconnected — reconnecting…';
+        label.classList.add('offline');
+        return;
+    }
+    label.classList.remove('offline');
+    const n = viewers.length || 1;
+    const room = sync && sync.room !== 'main' ? ` · room “${sync.room}”` : '';
+    label.textContent = n === 1
+        ? `Shared board · 1 viewer${room}`
+        : `Shared board · ${n} viewers${room}`;
+}
+
+function renderRemoteLog(entries) {
+    entries.forEach(e => {
+        STATUS_MSG.textContent = `${e.name}: ${e.text}`;
+        const line = document.createElement('p');
+        line.className = 'log-remote';
+        const who = document.createElement('span');
+        who.className = 'log-author';
+        who.style.color = e.color;
+        who.textContent = `${e.name}: `;
+        line.appendChild(who);
+        line.appendChild(document.createTextNode(e.text));
+        LOG_BOX.appendChild(line);
+        LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
+    });
+}
+
+
 // --- GAME LOGIC & SERVER COMMUNICATION ---
 
 function logMessage(message) {
@@ -531,9 +1122,11 @@ function logMessage(message) {
 
 function setButtonsDisabled(state) {
     NEW_GAME_BTN.disabled = state;
-    AI_MOVE_BTN.disabled = state;
-    MINIMAX_MOVE_BTN.disabled = state;
-    UNDO_BTN.disabled = state || currentMoveIndex === 0;
+    // The AI and the C++ engine are single instances on the server, so while one viewer
+    // has a search running nobody else may start another.
+    AI_MOVE_BTN.disabled = state || engineBusyElsewhere();
+    MINIMAX_MOVE_BTN.disabled = state || engineBusyElsewhere();
+    UNDO_BTN.disabled = state || engineBusyElsewhere() || currentMoveIndex === 0;
 }
 
 function checkGameOver(terminalMessage = null, nonTerminalMessage = null) {
@@ -585,6 +1178,9 @@ async function startNewGame() {
         updateMoveHistory(moveHistory);
         logMessage('Your turn! Click a column or let the AI play.');
 
+        // Everyone in the room gets the fresh board, whatever they were looking at.
+        await pushShared(fullSharedState(), { log: 'started a new game.' });
+
     } catch (error) {
         console.error('Error starting new game:', error);
         logMessage('Error: Could not start new game.');
@@ -614,6 +1210,8 @@ async function undoLastMove() {
 
     updateBoard(boardState);
     updateMoveHistory(moveHistory);
+
+    await pushBoard({ log: `took back the move in column ${lastMove}.` });
 
     isRequestInProgress = false;
     setButtonsDisabled(false);
@@ -658,6 +1256,15 @@ async function handlePlayerMove(column) {
     updateBoard(boardState, dropCoords);
     updateMoveHistory(moveHistory);
 
+    // Publish it. If someone else got their move in first this is rejected and the
+    // board we are now looking at is theirs, so there is nothing more to do here.
+    // The lock covers the round trip: a second click landing mid-flight would push a
+    // move built on a board the server has already refused.
+    isRequestInProgress = true;
+    const pushed = await pushBoard({ log: `played column ${column}.` });
+    isRequestInProgress = false;
+    if (!pushed.ok) return;
+
     // Check for game over locally
     if (!checkGameOver('You win!', 'Your turn! Click a column or let the AI play.')) {
         // If auto-play is on, and the game is not over, trigger the appropriate AI move
@@ -690,13 +1297,20 @@ async function requestAIMove() {
         return;
     }
 
+    if (engineBusyElsewhere()) {
+        logMessage('Another viewer already has the engine running.');
+        return;
+    }
+
     isRequestInProgress = true;
     setButtonsDisabled(true);
     logMessage('AI is thinking... 🤔');
+    // Claim the engine so the other viewers see why, and cannot start a second search.
+    await setEngineBusy('ai');
 
     try {
         // Add a small delay for better UX
-        await new Promise(resolve => setTimeout(resolve, 500)); 
+        await new Promise(resolve => setTimeout(resolve, 500));
         
         // We need to make sure the server has the latest state before asking for an AI move.
         await fetch('/api/set_state', {
@@ -723,6 +1337,9 @@ async function requestAIMove() {
         updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
+        const pushed = await pushBoard({ log: `let the AI play column ${move}.` });
+        if (!pushed.ok) return;
+
         if (!checkGameOver('AI wins!', 'Your turn! Click a column or let the AI play.')) {
             setButtonsDisabled(false); // Re-enable for next move
         }
@@ -733,6 +1350,7 @@ async function requestAIMove() {
         setButtonsDisabled(false); // Re-enable on error
     } finally {
         isRequestInProgress = false;
+        await setEngineBusy(null);   // release the engine for the other viewers
     }
 }
 
@@ -756,9 +1374,15 @@ async function requestMinimaxMove() {
         return;
     }
 
+    if (engineBusyElsewhere()) {
+        logMessage('Another viewer already has the engine running.');
+        return;
+    }
+
     isRequestInProgress = true;
     setButtonsDisabled(true);
     logMessage('Minimax AI is thinking...');
+    await setEngineBusy('minimax');
 
     try {
         const hexCodes = game.getStateHexCode(boardState).split(' ');
@@ -784,6 +1408,9 @@ async function requestMinimaxMove() {
         updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
+        const pushed = await pushBoard({ log: `let the minimax engine play column ${move}.` });
+        if (!pushed.ok) return;
+
         if (!checkGameOver('Minimax AI wins!', 'Your turn! Click a column or let the AI play.')) {
             setButtonsDisabled(false);
         }
@@ -794,6 +1421,7 @@ async function requestMinimaxMove() {
         setButtonsDisabled(false);
     } finally {
         isRequestInProgress = false;
+        await setEngineBusy(null);
     }
 }
 
@@ -815,6 +1443,9 @@ async function navigateHistory(direction) {
     boardState = state;
     updateBoard(boardState);
     updateMoveHistory(moveHistory); // Redraw to update highlighting
+
+    // Scrubbing the history is part of what the room is looking at, so it travels too.
+    pushShared({ view_index: currentMoveIndex, ghosts: [] });
 
     if (isViewingLive) {
         logMessage('Viewing the most recent move. Your turn!');
@@ -859,10 +1490,14 @@ function handleMoveInputChange(event) {
     updateBoard(boardState);
     updateMoveHistory(moveHistory);
 
+    // Loading a position replaces the board outright, so don't make it conditional on
+    // the room's version -- the point is to put everyone on this position.
+    pushBoard({ expect: false, log: `loaded a position: ${appliedMoves.join(' ') || '(empty board)'}` });
+
     setButtonsDisabled(false);
     isRequestInProgress = false;
 
-    
+
 }
 
 function handleKeyDown(event) {
@@ -914,6 +1549,7 @@ function onColumnClick(event) {
     } else if (event.button === 2) {
         // Right-click on empty space (not over a drop column) clears all planning ghosts.
         clearGhostPieces();
+        pushShared({ ghosts: [] });
     }
 }
 
@@ -929,15 +1565,16 @@ function handleGhostMove(column) {
     const player = game.getCurrentPlayer(tempState);
     const [depth, row, col] = landingPosition;
 
-    const pieceRadius = 0.4 * gameSettings.pieceSize;
-    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
     const material = player === 1 ? ghostPlayer1Material : ghostPlayer2Material;
 
-    const piece = new THREE.Mesh(pieceGeo, material);
+    const piece = createPieceMesh(material);
     piece.position.set(col, 3 - depth, row);
     piece.userData.isGhost = true;
     scene.add(piece);
     ghostPieces.push(piece);
+
+    // Planning ghosts are shared: they are how two people point at a line together.
+    pushShared({ ghosts: ghostCells() });
 }
 
 function getTemporaryState() {
@@ -1003,13 +1640,11 @@ async function showPreview(column) {
         scene.remove(previewPiece);
     }
 
-    const pieceRadius = 0.4 * gameSettings.pieceSize;
-    const pieceGeo = new THREE.SphereGeometry(pieceRadius, 32, 32);
-    const material = player === 1 
+    const material = player === 1
         ? new THREE.MeshStandardMaterial({ color: player1Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true })
         : new THREE.MeshStandardMaterial({ color: player2Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true });
 
-    previewPiece = new THREE.Mesh(pieceGeo, material);
+    previewPiece = createPieceMesh(material);
     previewPiece.position.set(col, 3 - depth, row);
     scene.add(previewPiece);
 }
@@ -1017,20 +1652,144 @@ async function showPreview(column) {
 function animate() {
     requestAnimationFrame(animate);
     updateDrops();
-    updateOutlines();
+    updateOcclusionOverlays();
     controls.update(); // only required if controls.enableDamping = true
     renderer.render(scene, camera);
 }
 
-// Keep each occlusion outline concentric with its piece and facing the camera, so the
-// ring stays aligned with the sphere's circular silhouette from any orbit angle.
-// (The ring is kept concentric on purpose: offsetting it toward the camera would shift
-// its projection sideways for off-centre pieces and clip into the sphere as a crescent.)
-function updateOutlines() {
-    if (pieceOutlines.length === 0) return;
-    for (const { ring, piece } of pieceOutlines) {
-        ring.position.copy(piece.position);
-        ring.quaternion.copy(camera.quaternion);
+// --- OCCLUSION OVERLAYS ---
+
+// A piece only reveals itself once at least this fraction of its on-screen area is
+// hidden behind other pieces. Below it, a piece that is merely clipped at the edge stays
+// quiet, so the highlight means "this one is genuinely buried", not "something grazes it".
+const OCCLUSION_COVERAGE_THRESHOLD = 0.6;
+const OCCLUSION_SAMPLES = 24;          // sample points per piece used to estimate coverage
+const OCCLUSION_FADE_MS = 220;         // time for an overlay to fade fully in or out
+let _ocLastFrameTime = 0;              // timestamp of the previous fade step
+
+// Sample points spread evenly over the unit disc (a sunflower/Vogel spiral, which gives a
+// far more uniform distribution than a polar grid for a small point count). Built once.
+const occlusionSamplePoints = (() => {
+    const points = [];
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+    for (let i = 0; i < OCCLUSION_SAMPLES; i++) {
+        const r = Math.sqrt((i + 0.5) / OCCLUSION_SAMPLES);  // sqrt keeps the area density even
+        const a = i * goldenAngle;
+        points.push([r * Math.cos(a), r * Math.sin(a)]);
+    }
+    return points;
+})();
+
+// Scratch state, reused every frame so the per-frame pass allocates nothing. _ocDiscs
+// grows to the high-water mark of pieces on the board and is then rewritten in place.
+const _ocCenter = new THREE.Vector3();
+const _ocEdge = new THREE.Vector3();
+const _ocCamRight = new THREE.Vector3();
+const _ocDiscs = [];
+
+// Runs once per frame. Three jobs:
+//  1. Keep each outline ring concentric with its piece and facing the camera, so it stays
+//     aligned with the silhouette from any orbit angle. (Concentric on purpose: offsetting
+//     it toward the camera would shift its projection sideways for off-centre pieces.)
+//  2. Decide which pieces are buried enough to show their occlusion overlay at all.
+//  3. Step each overlay's fade toward that decision, so overlays dissolve in and out.
+//
+// Coverage is estimated in screen space rather than by raycasting: each piece becomes a
+// disc (centre + radius in aspect-corrected NDC), and a piece's sample points are tested
+// against the discs of every piece nearer the camera. It is an approximation -- the bead
+// is not a perfect disc -- but it only has to answer "is most of this thing hidden?", and
+// at 64 pieces x 24 samples it costs a fraction of a millisecond.
+function updateOcclusionOverlays() {
+    // Advance the clock even when there is nothing to draw, so returning to a populated
+    // board does not hand the fade one enormous first step.
+    const now = performance.now();
+    // Clamped: a backgrounded tab can hand back a gap of seconds, which would snap every
+    // overlay to its target and defeat the point of the fade.
+    const elapsed = _ocLastFrameTime ? Math.min(now - _ocLastFrameTime, 100) : 0;
+    _ocLastFrameTime = now;
+
+    if (pieceOverlays.length === 0) return;
+
+    // The camera's world-space X axis: stepping along it from a piece's centre lands on
+    // the edge of its silhouette, whichever way the camera is pointing.
+    _ocCamRight.setFromMatrixColumn(camera.matrixWorld, 0);
+    const aspect = camera.aspect || 1;
+
+    const count = pieceOverlays.length;
+    for (let i = 0; i < count; i++) {
+        const { piece, ring } = pieceOverlays[i];
+        if (ring) {
+            ring.position.copy(piece.position);
+            ring.quaternion.copy(camera.quaternion);
+        }
+
+        // Distance to the camera, used to decide which pieces can occlude which.
+        const depth = _ocCenter.copy(piece.position).distanceTo(camera.position);
+
+        _ocEdge.copy(piece.position).addScaledVector(_ocCamRight, pieceSilhouetteRadius * piece.scale.x);
+        _ocCenter.project(camera);
+        _ocEdge.project(camera);
+
+        const disc = _ocDiscs[i] || (_ocDiscs[i] = { x: 0, y: 0, r: 0, depth: 0 });
+        // NDC is stretched to the viewport, so scale x by the aspect ratio to get a space
+        // in which a circle on screen is a circle here.
+        disc.x = _ocCenter.x * aspect;
+        disc.y = _ocCenter.y;
+        disc.r = Math.abs(_ocEdge.x - _ocCenter.x) * aspect;
+        disc.depth = depth;
+    }
+
+    const needed = OCCLUSION_COVERAGE_THRESHOLD * OCCLUSION_SAMPLES;
+    const fadeStep = OCCLUSION_FADE_MS > 0 ? elapsed / OCCLUSION_FADE_MS : 1;
+
+    for (let i = 0; i < count; i++) {
+        const disc = _ocDiscs[i];
+        let blocked = 0;
+
+        for (let s = 0; s < OCCLUSION_SAMPLES; s++) {
+            const sample = occlusionSamplePoints[s];
+            const px = disc.x + sample[0] * disc.r;
+            const py = disc.y + sample[1] * disc.r;
+            for (let j = 0; j < count; j++) {
+                if (j === i) continue;
+                const other = _ocDiscs[j];
+                if (other.depth >= disc.depth) continue;   // level with or behind: cannot hide it
+                const dx = px - other.x;
+                const dy = py - other.y;
+                if (dx * dx + dy * dy <= other.r * other.r) { blocked++; break; }
+            }
+        }
+
+        // Ease toward the target rather than snapping to it, so a piece sliding behind
+        // another (or the camera orbiting past the threshold) dissolves in instead of
+        // blinking on. The threshold itself stays a hard boolean -- only its presentation
+        // is smoothed.
+        const overlay = pieceOverlays[i];
+        const target = blocked >= needed ? 1 : 0;
+        let fade = overlay.fade;
+        if (fade < target) fade = Math.min(target, fade + fadeStep);
+        else if (fade > target) fade = Math.max(target, fade - fadeStep);
+        overlay.fade = fade;
+        occlusionFade.set(overlay.key, fade);
+        applyOverlayFade(overlay);
+    }
+}
+
+// Push an overlay's fade value out to its meshes.
+function applyOverlayFade(overlay) {
+    // Smoothstep: eases out of 0 and into 1, so neither end of the fade has the visible
+    // corner a straight linear ramp leaves.
+    const f = overlay.fade;
+    const eased = f * f * (3 - 2 * f);
+    const visible = eased > 0.001;
+
+    if (overlay.mask) {
+        overlay.mask.visible = visible;
+        overlay.mask.material.opacity = gameSettings.maskOpacity * eased;
+    }
+    if (overlay.ring) {
+        overlay.ring.visible = visible;
+        overlay.ring.material.opacity = eased;
     }
 }
 
@@ -1049,6 +1808,12 @@ function updateDrops() {
             const eased = t * t; // ease-in
             d.mesh.position.y = d.startY + (d.endY - d.startY) * eased;
         }
+    }
+    // The winning bar is built as soon as the board updates, but showing it while the
+    // deciding piece is still in the air gives the win away early -- reveal it the moment
+    // the last piece lands.
+    if (activeDrops.length === 0) {
+        winHighlights.forEach(m => { m.visible = true; });
     }
 }
 
@@ -1273,7 +2038,10 @@ function enterPuzzleMode() {
     document.getElementById('upload-puzzle-btn').classList.add('hidden');
 }
 
-function exitPuzzleMode() {
+// Tear the puzzle UI down and go back to the normal game controls. Split out of
+// exitPuzzleMode so a viewer who is told "the room left Puzzle Mode" can follow along
+// without also starting a game of its own.
+function leavePuzzleUI() {
     isPuzzleMode = false;
     puzzles = [];
     puzzleSource = null;
@@ -1288,7 +2056,11 @@ function exitPuzzleMode() {
     document.getElementById('upload-puzzle-btn').classList.remove('hidden');
 
     document.getElementById('puzzle-file-input').value = '';
-    startNewGame();
+}
+
+function exitPuzzleMode() {
+    leavePuzzleUI();
+    startNewGame();   // pushes the empty board, taking the whole room out of Puzzle Mode
 }
 
 function handlePrevPuzzle() {
@@ -1347,11 +2119,15 @@ function loadPuzzle(index) {
 
     updatePuzzleInfo();
 
-    const colorName = game.getCurrentPlayer(boardState) === 1 ? 'Yellow' : 'Red';
+    const colorName = game.getCurrentPlayer(boardState) === 1 ? PLAYER1_NAME : PLAYER2_NAME;
     const label = puzzleSource === 'engine'
         ? categoryLabel(selectedCategory)
         : `Puzzle ${index + 1}`;
     logMessage(`${label} — ${colorName} to move.`);
+
+    // A new puzzle replaces whatever the room was on, so this push is unconditional and
+    // carries the puzzle set itself (the only place that field is sent).
+    pushShared(fullSharedState(), { log: `opened ${label.toLowerCase()} — ${colorName} to move.` });
 }
 
 async function handlePuzzleMove(column) {
@@ -1376,6 +2152,7 @@ async function handlePuzzleMove(column) {
     updateBoard(boardState, dropCoords);
     updateMoveHistory(moveHistory);
     currentPuzzleSolutionIndex++;
+    pushBoard({ log: `found column ${column}.` });
 
     if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
         finishPuzzle();
@@ -1394,6 +2171,7 @@ async function handlePuzzleMove(column) {
     updateMoveHistory(moveHistory);
     currentPuzzleSolutionIndex++;
     isRequestInProgress = false;
+    pushBoard({ expect: false });
 
     if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
         finishPuzzle();
@@ -1406,6 +2184,7 @@ function finishPuzzle() {
     currentPuzzleSolved = true;
     updatePuzzleInfo();
     logMessage('Puzzle solved! 🎉  Click > for a new one.');
+    pushBoard({ expect: false, log: 'solved the puzzle! 🎉' });
 }
 
 async function showSolution() {
@@ -1421,13 +2200,21 @@ async function showSolution() {
         currentMoveIndex = moveHistory.length;
         updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
+        currentPuzzleSolutionIndex = i + 1;
+        // Pushed a move at a time so the other viewers watch it play out, not jump.
+        pushBoard({ expect: false });
     }
     currentPuzzleSolutionIndex = puzzle.solution.length;
     currentPuzzleSolved = true;
     isRequestInProgress = false;
     updatePuzzleInfo();
     logMessage('Solution shown. Click > for a new puzzle.');
+    pushBoard({ expect: false, log: 'revealed the solution.' });
 }
 
 // --- START ---
-init();
+// The piece model must be in place before the first updateBoard, so init() waits on it.
+// A failure is non-fatal: pieceBaseGeo stays a unit sphere and the game runs as before.
+loadPieceModel(PIECE_MODEL_URL)
+    .catch((err) => console.warn(`Could not load ${PIECE_MODEL_URL}; falling back to spheres.`, err))
+    .finally(() => init());
