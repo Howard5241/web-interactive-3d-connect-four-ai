@@ -163,6 +163,12 @@ def _clean_puzzle(value):
         }
         if p.get('mate') is not None:
             entry['mate'] = _clean_int(p['mate'], 'puzzle mate', 0, NUM_CELLS)
+        if p.get('steps') is not None:
+            entry['steps'] = _clean_int(p['steps'], 'puzzle steps', 1, NUM_CELLS // 2)
+        if p.get('goal') is not None:
+            if p['goal'] not in ('win', 'draw'):
+                raise ValueError('puzzle goal must be win or draw')
+            entry['goal'] = p['goal']
         if p.get('id') is not None:
             entry['id'] = str(p['id'])[:64]
         puzzles.append(entry)

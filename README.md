@@ -120,46 +120,39 @@ long-lived stream would occupy it.
 
 ## Puzzle mode
 
-A puzzle is a position that is objectively mate-in-k for the side to move. The line you
-play is truncated so you are never shown a position with more than one winning move: it
-continues only while your move is the single winning move, and stops at the first branch.
-So a mate-in-8 whose only forced-unique move is the first is a one-move puzzle, still
-filed under mate 8. The mate distance decides the category but is not shown to the
-player.
+A puzzle has exactly one winning move, or exactly one drawing move when every other
+move loses. Each solver turn in the recorded line is verified by exact V3 proofs.
+The opponent reply is selected to expose another unique decision. Lines can finish
+before actual mate; they never ask an ambiguous or unverified solver decision.
 
-| Category | Mate distance | In the bank |
-| :-- | :-- | --: |
-| Quick win | 1-3 | 22,395 |
-| Medium win | 4-5 | 447 |
-| Long win | 6-11 | 265 |
-| Endgame | 12+ | 221 |
+Categories now measure **actual playable decisions**, not theoretical mate distance:
+Quick 1–3, Medium 4–5, Long 6–11, Endgame 12+. Legacy mate labels remain metadata;
+V3 records have `mate=null`, `steps`, and `goal=win|draw` in the API. Existing puzzle
+files are not rewritten or deleted by the background worker.
 
-Counts are the current contents of `puzzles/` (23,328 total, deduplicated on load).
-The distribution is heavily skewed: mate-in-1 alone is 18,922 of them, while the longest
-buckets hold a few dozen each. Deep forced wins are rare and slow to verify, so those
-categories grow slowly.
-
-*   **Solving.** Click the column of the winning move. The opponent's forced reply plays
+*   **Solving.** Click the column of the winning/drawing move. The opponent's reply plays
     automatically; wrong moves are rejected so you can retry. There are buttons to reset
     the position, play out the solution, and fetch another puzzle in the same category.
     The move-history panel stays available, so a position can be copied out for analysis.
-*   **Where puzzles come from.** The engine's generator plays the optimal line to the real
-    mate to get the objective distance k, then truncates the recorded solution at the
-    first position where more than one move wins, decided by a full exact solve rather
-    than a forcing-search shortcut. Results are stored in `puzzles/mate_in_<k>.txt` and
-    loaded into an in-memory bank at startup. (The engine's `truncatepuzzles` CLI applies
-    the same rule to an existing bank.)
+*   **Where puzzles come from.** V3 samples quiet legal 26–28-piece positions, proves
+    uniqueness using win/draw threshold searches, and builds the longest verified
+    continuation found within its budget. It does not optimize mate distance.
+    Versioned records are appended to `puzzles/generated_v3.jsonl`, with symmetry-
+    canonical identities for deduplication. Interrupted final records are ignored.
 *   **Background generation.** While the puzzle UI is open, the engine generates and
     verifies puzzles in short batches:
     ```
-    bin/connect4_3D.exe genpuzzle 1 40 <outputDir> 12 <minPieces> <maxPieces>
+    bin/connect4_3D.exe genpuzzle 2 400 <outputDir> 30 26 28 2
     ```
-    Each batch keeps every mate length at once. Seed piece-counts rotate through windows
-    inside 26-32 pieces (32-38 empty cells), which keeps candidates on emptier boards
-    where the interesting positions are, at the cost of slower exact solves. New puzzles
-    are appended, the bank reloads, and the files are rewritten deduplicated every fifth
-    batch. Generation can be paused from the UI, and leaving puzzle mode kills the current
-    batch immediately so the engine is free for the minimax opponent.
+    Defaults: 30-second batches, 2 seconds total per candidate including continuation,
+    at least two playable solver moves, one below-normal-priority Windows process.
+    Configure `PUZZLE_SEEDS`, `PUZZLE_BATCH_SECONDS`, `PUZZLE_CANDIDATE_SECONDS`
+    (maximum 120), and `PUZZLE_MIN_STEPS` before starting Flask. Set longer batch and
+    candidate budgets together when mining harder puzzles. Leaving puzzle mode kills
+    the process immediately; a batch also has a five-second external timeout grace.
+    Build/deploy from the C++ folder with `build.ps1 -Tests -DeployWeb`; see the
+    sibling engine's [pipeline report](../connect4-c++/PUZZLES_V3.md) for guarantees
+    and measured throughput. Restart Flask after updating Python code.
 *   **File puzzles.** "Load from File" accepts `.txt` puzzle files in either the 2-line
     (`history` / `solution`) or the engine's 3-line (`board code` / `history` / `solution`)
     format.

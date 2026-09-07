@@ -33,12 +33,12 @@
 
             <div id="engine-puzzle-setup" class="hidden">
                 <h3>Puzzle Mode</h3>
-                <p class="setup-label">Choose a category (forced winning moves to find):</p>
+                <p class="setup-label">Find the only winning or drawing move at every turn:</p>
                 <div id="category-selector">
-                    <button class="cat-btn selected" data-category="quick">Quick&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;1–3</span></button>
-                    <button class="cat-btn" data-category="medium">Medium&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;4–5</span></button>
-                    <button class="cat-btn" data-category="long">Long&nbsp;win<span class="cat-sub">mate&nbsp;in&nbsp;6–11</span></button>
-                    <button class="cat-btn" data-category="endgame">Endgame<span class="cat-sub">mate&nbsp;in&nbsp;12+</span></button>
+                    <button class="cat-btn selected" data-category="quick">Quick<span class="cat-sub">1–3&nbsp;moves</span></button>
+                    <button class="cat-btn" data-category="medium">Medium<span class="cat-sub">4–5&nbsp;moves</span></button>
+                    <button class="cat-btn" data-category="long">Long<span class="cat-sub">6–11&nbsp;moves</span></button>
+                    <button class="cat-btn" data-category="endgame">Endgame<span class="cat-sub">12+&nbsp;moves</span></button>
                 </div>
                 <div id="mate-count-hint" class="mate-count-hint"></div>
                 <div class="setup-actions">
@@ -118,12 +118,13 @@
         <div class="history-header">
             <h2>Move History</h2>
             <div>
+                <span id="piece-count" title="Pieces on the board">⚪ <span id="piece-count-value">0</span></span>
                 <button id="copy-moves-btn" title="Copy Moves">📝</button>
                 <button id="copy-hex-btn" title="Copy State Hex">📋</button>
             </div>
         </div>
         <div id="move-history-box"></div>
-        <input type="text" id="move-input" placeholder="e.g., 1 3 12 15">
+        <input type="text" id="move-input" placeholder="e.g., 1 3 12 15 or 1,3,12,15">
     </div>
     <div id="log-container">
         <h2>Game Log</h2>

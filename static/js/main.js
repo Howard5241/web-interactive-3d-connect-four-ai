@@ -46,7 +46,7 @@ let occlusionFade = new Map();
 let winHighlights = [];
 
 // DOM Elements (will be assigned in init)
-let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN;
+let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN, PIECE_COUNT_VALUE;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
 let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE, DROP_ANIMATION_TOGGLE;
 let OUTLINE_THICKNESS_SLIDER, OUTLINE_THICKNESS_VALUE, MASK_OPACITY_SLIDER, MASK_OPACITY_VALUE;
@@ -104,10 +104,10 @@ let puzzleSource = null;          // 'file' | 'engine'
 let selectedCategory = 'quick';  // chosen difficulty category for engine puzzles
 // Category definitions (mirrors puzzle_bank.CATEGORIES); refreshed from the server.
 let CATEGORIES = [
-    { key: 'quick',   label: 'Quick win',  range_label: 'mate in 1–3',  min: 1,  max: 3 },
-    { key: 'medium',  label: 'Medium win', range_label: 'mate in 4–5',  min: 4,  max: 5 },
-    { key: 'long',    label: 'Long win',   range_label: 'mate in 6–11', min: 6,  max: 11 },
-    { key: 'endgame', label: 'Endgame',    range_label: 'mate in 12+',  min: 12, max: null },
+    { key: 'quick',   label: 'Quick puzzle',  range_label: '1–3 moves to find',  min: 1,  max: 3 },
+    { key: 'medium',  label: 'Medium puzzle', range_label: '4–5 moves to find',  min: 4,  max: 5 },
+    { key: 'long',    label: 'Long puzzle',   range_label: '6–11 moves to find', min: 6,  max: 11 },
+    { key: 'endgame', label: 'Endgame',       range_label: '12+ moves to find',  min: 12, max: null },
 ];
 const categoryLabel = (key) => (CATEGORIES.find(c => c.key === key) || {}).label || key;
 let currentPuzzleSolved = false;
@@ -187,6 +187,7 @@ function init() {
     UNDO_BTN = document.getElementById('undo-btn');
     LOG_BOX = document.getElementById('log-box');
     MOVE_HISTORY_BOX = document.getElementById('move-history-box');
+    PIECE_COUNT_VALUE = document.getElementById('piece-count-value');
     MOVE_INPUT = document.getElementById('move-input');
     COPY_HEX_BTN = document.getElementById('copy-hex-btn');
     COPY_MOVES_BTN = document.getElementById('copy-moves-btn');
@@ -834,6 +835,15 @@ function updateMoveHistory(newMoveHistory) {
         MOVE_HISTORY_BOX.appendChild(moveBox);
     });
     MOVE_HISTORY_BOX.scrollTop = MOVE_HISTORY_BOX.scrollHeight;
+    updatePieceCount();
+}
+
+// Shows how many pieces are currently on the board (which is the number of
+// moves being displayed, not necessarily the full history when scrubbing).
+function updatePieceCount() {
+    if (PIECE_COUNT_VALUE) {
+        PIECE_COUNT_VALUE.textContent = currentMoveIndex;
+    }
 }
 
 
@@ -1468,7 +1478,13 @@ function handleMoveInputChange(event) {
         return; // Do nothing if input is empty
     }
 
-    const moves = movesString.split(/\s+/).map(Number);
+    // Moves may be separated by spaces, commas, or a mix of the two.
+    const tokens = movesString.split(/[\s,]+/).filter(t => t.length);
+    if (!tokens.every(t => /^\d+$/.test(t))) {
+        logMessage('Invalid move list: expected numbers separated by spaces or commas.');
+        return;
+    }
+    const moves = tokens.map(Number);
 
     // Immediately clear the input and show loading state
     MOVE_INPUT.value = '';
@@ -1848,7 +1864,7 @@ function isBoardCodeLine(line) {
 }
 
 function parseMoveLine(line) {
-    const toks = line.split(/\s+/).filter(t => t.length);
+    const toks = line.split(/[\s,]+/).filter(t => t.length);
     const out = [];
     for (const t of toks) {
         const v = Number(t);
@@ -1918,7 +1934,7 @@ function renderMateHint(counts, categoryCounts) {
     const n = cc[selectedCategory] || 0;
     const summary = CATEGORIES.map(c => `${c.label.split(' ')[0]} ${cc[c.key] || 0}`).join('  ·  ');
     document.getElementById('mate-count-hint').textContent =
-        `${n} ${sel.label} puzzles (${sel.range_label}) available   —   ${summary}`;
+        `${n} puzzles (${sel.range_label}) available   —   ${summary}`;
 }
 
 function selectCategory(key) {
@@ -1942,7 +1958,7 @@ async function startEnginePuzzle(category) {
     if (isRequestInProgress) return;
     isRequestInProgress = true;
     const label = categoryLabel(category);
-    logMessage(`Fetching a ${label} puzzle from the engine...`);
+    logMessage(`Fetching a ${label.toLowerCase()} from the engine...`);
     try {
         const res = await fetch(`/api/puzzle?category=${encodeURIComponent(category)}`);
         const data = await res.json();
@@ -1953,7 +1969,8 @@ async function startEnginePuzzle(category) {
                 `No ${label} puzzles yet — the engine is generating; try again shortly.`;
             return;
         }
-        puzzles = [{ history: data.history, solution: data.solution, mate: data.mate, id: data.id }];
+        puzzles = [{ history: data.history, solution: data.solution, mate: data.mate,
+                 steps: data.steps, goal: data.goal, id: data.id }];
         puzzleSource = 'engine';
         selectedCategory = category;
         if (!isPuzzleMode) enterPuzzleMode();
@@ -1989,7 +2006,15 @@ async function stopBackgroundGeneration() {
     generationRunning = false;
     updateGenerateButton();
     try {
-        await fetch('/api/puzzle/generate/stop', { method: 'POST' });
+        const response = await fetch('/api/puzzle/generate/stop', { method: 'POST' });
+        const data = await response.json();
+        if (!generationRunning) {
+            const message = data.status?.message || 'Generation paused.';
+            for (const id of ['generate-status', 'puzzle-gen-indicator']) {
+                const indicator = document.getElementById(id);
+                if (indicator) indicator.textContent = message;
+            }
+        }
     } catch (e) { /* ignore */ }
 }
 
@@ -2086,7 +2111,8 @@ function updatePuzzleInfo() {
         // Deliberately do NOT show the objective mate distance -- the point of the puzzle
         // is to find the win without knowing how many moves it takes.
         title.textContent = categoryLabel(selectedCategory);
-        status.textContent = currentPuzzleSolved ? 'Solved ✓' : 'Your move';
+        status.textContent = currentPuzzleSolved ? 'Solved ✓'
+            : (puzzles[currentPuzzleIndex]?.goal === 'draw' ? 'Find the only draw' : 'Find the only win');
         prev.disabled = true;
         next.disabled = false;
         prev.title = 'Not available for engine puzzles';
@@ -2139,7 +2165,7 @@ async function handlePuzzleMove(column) {
     const expectedMove = puzzle.solution[currentPuzzleSolutionIndex];
 
     if (column !== expectedMove) {
-        logMessage('Not the winning move — try again (↻ to reset, 💡 for the solution).');
+        logMessage(`Not the ${puzzle.goal === 'draw' ? 'drawing' : 'winning'} move — try again (↻ to reset, 💡 for the solution).`);
         return;
     }
 
@@ -2176,7 +2202,7 @@ async function handlePuzzleMove(column) {
     if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
         finishPuzzle();
     } else {
-        logMessage(`Opponent replied (column ${opponentMove}). Your move — find the win!`);
+        logMessage(`Opponent replied (column ${opponentMove}). Your move — find the ${puzzle.goal === 'draw' ? 'draw' : 'win'}!`);
     }
 }
 

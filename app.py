@@ -96,7 +96,13 @@ PUZZLE_DIR = os.path.join(BASE_DIR, 'puzzles')
 ENGINE_EXE = os.path.join(BASE_DIR, 'bin', 'connect4_3D.exe')
 
 puzzle_bank = PuzzleBank(PUZZLE_DIR)
-generation_manager = GenerationManager(puzzle_bank, ENGINE_EXE, PUZZLE_DIR)
+generation_manager = GenerationManager(
+    puzzle_bank, ENGINE_EXE, PUZZLE_DIR,
+    seeds=int(os.environ.get('PUZZLE_SEEDS', '400')),
+    batch_seconds=float(os.environ.get('PUZZLE_BATCH_SECONDS', '120')),
+    candidate_seconds=float(os.environ.get('PUZZLE_CANDIDATE_SECONDS', '20')),
+    min_steps=int(os.environ.get('PUZZLE_MIN_STEPS', '2')),
+)
 print(f"Puzzle bank loaded from {PUZZLE_DIR}: {puzzle_bank.counts()} "
       f"(total {puzzle_bank.total()})")
 
@@ -297,7 +303,7 @@ def get_puzzle():
             return jsonify({"error": f"Unknown category '{category_key}'."}), 400
         served_key = category_key
         min_mate, max_mate = cat['min'], cat['max']
-        empty_msg = f"No {cat['label']} puzzles in the bank yet. The engine is generating — try again shortly."
+        empty_msg = f"No puzzles in '{cat['label']}' yet. The engine is generating — try again shortly."
     else:
         try:
             mate = int(request.args.get('mate', 1))
@@ -329,7 +335,9 @@ def get_puzzle():
         "history": puzzle['history'],
         "solution": puzzle['solution'],
         "mate": puzzle['mate'],
-        "category": category_for_mate(puzzle['mate']),
+        "steps": puzzle['steps'],
+        "goal": puzzle['goal'],
+        "category": category_for_mate(puzzle['steps']),
         "id": puzzle['id'],
         "counts": puzzle_bank.counts(),
         "category_counts": puzzle_bank.category_counts(),

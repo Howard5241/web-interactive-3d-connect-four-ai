@@ -137,7 +137,7 @@ h1 {
 #log-container {
     position: absolute;
     bottom: 20px;
-    left: 20px;
+    right: 20px;
     width: 300px;
     background-color: rgba(0, 0, 0, 0.7);
     border-radius: 8px;
@@ -451,7 +451,17 @@ h1 {
 
 .history-header div {
     display: flex;
+    align-items: center;
     gap: 8px;
+}
+
+#piece-count {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 0.85em;
+    color: #ffa500;
+    white-space: nowrap;
 }
 
 #copy-hex-btn, #copy-moves-btn {
