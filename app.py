@@ -184,8 +184,12 @@ def minimax_move():
             universal_newlines=True
         )
         
-        # Write commands to the engine
-        engine.stdin.write("10\n")
+        # Drive the engine's interactive menu:
+        #   16, 4     -> select Strong V4 (hole-aware evaluation) as the active bot
+        #   10, <hex> -> paste the board code
+        #   1, 2      -> play against the bot, "auto" so the bot moves immediately
+        #   m, 99     -> back to the menu and exit
+        engine.stdin.write("16\n4\n10\n")
         engine.stdin.write(f"{hex_p1} {hex_p2}\n1\n2\nm\n99\n")
         engine.stdin.flush()
 
@@ -196,7 +200,7 @@ def minimax_move():
             raise Exception(f"Engine exited with error code {engine.returncode}: {stderr}")
 
         # Find the move in the output
-        match = re.search(r'\*\*(\d+)\*\*', stdout)
+        match = re.search(r'played move:\s*(\d+)', stdout)
         if not match:
             raise Exception(f"Could not find move in engine output. Output: {stdout}")
             

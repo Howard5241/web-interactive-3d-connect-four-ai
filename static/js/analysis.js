@@ -6,7 +6,8 @@ export class AnalysisPanel {
     // onBest receives the column the engine currently likes, or null whenever there is
     // nothing to point at (no completed iteration yet, game over, analysis off, or the
     // board indicator switched off in the panel's settings).
-    constructor(onToggle, onPlay, onBest = () => {}) {
+    // onPlayLine receives a whole continuation, root move first, to play in one step.
+    constructor(onToggle, onPlay, onBest = () => {}, onPlayLine = () => {}) {
         this.enabled = false;
         this.paused = false;
         this.moves = [];
@@ -21,6 +22,7 @@ export class AnalysisPanel {
         this.onToggle = onToggle;
         this.onPlay = onPlay;
         this.onBest = onBest;
+        this.onPlayLine = onPlayLine;
         this.el = id => document.getElementById(id);
         this.el('analysis-pause').addEventListener('click', () => {
             this.paused = !this.paused;
@@ -31,7 +33,12 @@ export class AnalysisPanel {
             this.status(this.paused ? 'Paused · last completed evaluation retained' : 'Starting engine…');
             this.tick();
         });
-        this.el('analysis-top').addEventListener('change', () => this.invalidate());
+        // The engine values every legal root move whatever this is set to, so the row
+        // count is a pure display choice. Re-rank what is already in hand instead of
+        // restarting the search and throwing away its table, depth and proof progress.
+        this.el('analysis-top').addEventListener('change', () => {
+            if (this.data) this.render(this.data);
+        });
         this.el('analysis-best-toggle').addEventListener('change', () => this.emitBest());
         this.el('analysis-settings-btn').addEventListener('click', event => {
             event.stopPropagation();
@@ -173,8 +180,9 @@ export class AnalysisPanel {
     }
 
     scoreText(row) {
-        if (row.mate_plies != null) return `${row.score < 0 ? '−' : ''}M${Math.ceil(row.mate_plies / 2)}`;
+        if (row.mate_plies != null) return `${row.mate_exact === false ? '≈' : ''}${row.score < 0 ? '−' : ''}M${Math.ceil(row.mate_plies / 2)}`;
         if (row.solved && row.score) return row.score > 0 ? 'L wins' : 'D wins';
+        if (row.solved && row.score === 0) return 'Draw';
         return `${row.score > 0 ? '+' : ''}${row.score}`;
     }
 
@@ -193,7 +201,11 @@ export class AnalysisPanel {
     render(data) {
         this.data = data;
         const terminal = data.type === 'terminal';
-        const fingerprint = JSON.stringify([data.depth, data.moves, terminal]);
+        // Ranked rows are capped for display only. Slicing before the fingerprint means
+        // a change to the row count rebuilds the list on its own, and a poll that brings
+        // nothing new still costs nothing.
+        const shown = data.moves.slice(0, Math.max(1, Number(this.el('analysis-top').value) || 3));
+        const fingerprint = JSON.stringify([data.depth, shown, terminal, data.phase]);
         if (this.last !== fingerprint) {
             this.last = fingerprint;
             const expanded = new Set([...this.el('analysis-lines').querySelectorAll('details[open]')].map(el => el.dataset.move));
@@ -201,7 +213,7 @@ export class AnalysisPanel {
             this.el('analysis-depth').textContent = `Depth ${data.depth || '—'}`;
             this.setBar(data.moves[0], terminal ? data.winner : null);
             this.setBest(terminal ? null : data.moves[0]?.move);
-            for (const [rank, row] of data.moves.entries()) {
+            for (const [rank, row] of shown.entries()) {
                 const detail = document.createElement('details');
                 detail.className = 'analysis-line';
                 detail.dataset.move = String(row.move);
@@ -210,7 +222,11 @@ export class AnalysisPanel {
                 const score = document.createElement('span');
                 score.className = `analysis-score${row.score < 0 ? ' dark' : ''}`;
                 score.textContent = this.scoreText(row);
-                score.title = row.solved ? 'Proved outcome; mate distance may not be shortest' : 'Heuristic evaluation in engine units';
+                score.title = row.mate_exact && row.mate_plies != null
+                    ? `Exact mate in ${row.mate_plies} plies after this root move is chosen (including that move); winner mates fastest, defender delays longest`
+                    : row.solved && row.score === 0 ? 'Proved draw; no mate distance'
+                    : row.solved ? 'Proved outcome; exact mate distance not yet established'
+                    : 'Heuristic evaluation in engine units';
                 const line = row.pv.map((move, i) => {
                     const ply = this.moves.length + i;
                     return `${ply % 2 === 0 ? `${Math.floor(ply / 2) + 1}. ` : i === 0 ? `${Math.floor(ply / 2) + 1}… ` : ''}${formatColumn(move)}`;
@@ -228,6 +244,16 @@ export class AnalysisPanel {
                 play.title = 'Play this move on the shared board (replaces future history if reviewing)';
                 play.addEventListener('click', () => this.onPlay(row.move));
                 detail.append(summary, pv, play);
+                // A one-move line is exactly what the button above already does, so the
+                // second button only appears when there is actually a line to follow.
+                if (row.pv.length > 1) {
+                    const playLine = document.createElement('button');
+                    playLine.className = 'analysis-play analysis-play-line';
+                    playLine.textContent = `Play line (${row.pv.length} moves)`;
+                    playLine.title = 'Play this whole continuation on the shared board, both sides, in one step (replaces future history if reviewing)';
+                    playLine.addEventListener('click', () => this.onPlayLine(row.pv));
+                    detail.append(playLine);
+                }
                 this.el('analysis-lines').append(detail);
             }
             if (!data.moves.length) {
@@ -239,9 +265,14 @@ export class AnalysisPanel {
         }
         const seconds = (data.elapsed_ms || 0) / 1000;
         this.el('analysis-stats').textContent = `${(data.nodes || 0).toLocaleString()} nodes · ${seconds.toFixed(1)}s · ${seconds > 0 ? Math.round(data.nodes / seconds / 1000) : 0}k nodes/s`;
-        this.status(terminal ? 'Game over' : data.complete ? 'All root moves resolved'
+        this.status(terminal ? 'Game over' : data.mate_complete ? 'All root moves resolved · exact mate distances'
+            : data.phase === 'mate' ? (data.running
+                ? 'Outcomes proved · finding exact mate distances · ranking provisional'
+                : 'Outcomes proved · mate refinement incomplete · Resume for a new search')
+            : data.complete ? 'All root moves resolved'
             : !data.running ? (data.timed_out ? 'Time limit reached · Resume for a new search' : 'Search finished')
-            : `Analyzing ${this.moves.length % 2 ? 'Dark' : 'Light'} orange · searching depth ${(data.depth || 0) + 2}`, data.running && !terminal && !data.complete);
+            : `Analyzing ${this.moves.length % 2 ? 'Dark' : 'Light'} orange · next eval depth ${data.depth ? data.depth + 2 : this.moves.length % 2 ? 1 : 2}`,
+            data.running && !terminal && (!data.complete || data.phase === 'mate'));
         if (!data.running) {
             this.paused = true;
             this.finished = true;

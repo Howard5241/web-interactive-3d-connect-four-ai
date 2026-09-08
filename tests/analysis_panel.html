@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Analysis panel regression fixture</title>
+<link rel="stylesheet" href="../static/css/analysis.css">
+<style>body { background: #171c27; color: #eee; font: 16px system-ui; padding: 2rem; }
+#analysis-panel { position: static; width: 360px; } .hidden { display: none; }</style>
+<button id="analysis-toggle">Analysis</button>
+<div id="eval-bar-container"><div id="eval-bar" role="meter"><div id="eval-light"></div></div><span id="eval-value"></span></div>
+<section id="analysis-panel">
+  <button id="analysis-pause">Pause</button>
+  <button id="analysis-settings-btn">Settings</button>
+  <div id="analysis-settings" class="hidden">
+    <select id="analysis-top"><option value="3">3</option></select>
+    <input id="analysis-best-toggle" type="checkbox" checked>
+  </div>
+  <h2 id="analysis-depth"></h2><p id="analysis-status"></p><p id="analysis-stats"></p>
+  <div id="analysis-lines"></div>
+</section>
+<p id="test-result">Running browser regression checks…</p>
+<script type="module">
+import { AnalysisPanel } from '../static/js/analysis.js';
+const assert = (ok, message) => { if (!ok) throw new Error(message); };
+const panel = new AnalysisPanel(() => {}, () => {});
+// Isolated renderer test: no shared-room writes, HTTP jobs, neural model or GPU.
+panel.tick = async () => {};
+panel.moves = [0];
+const snapshot = {
+    type: 'iteration', depth: 37, nodes: 1000, elapsed_ms: 10,
+    complete: true, phase: 'mate', mate_complete: false, running: true,
+    moves: [{ move: 5, score: 30000, solved: true, mate_exact: false, mate_plies: null, pv: [5] }],
+};
+panel.render(snapshot);
+assert(document.getElementById('analysis-status').textContent.includes('finding exact'), 'Missing refinement status');
+assert(document.getElementById('analysis-status').classList.contains('thinking'), 'Refinement must remain active');
+assert(document.querySelector('.analysis-score').textContent === 'L wins', 'Lost initial WDL');
+panel.render({ ...snapshot, running: false, timed_out: true });
+assert(document.getElementById('analysis-status').textContent.includes('incomplete'), 'Timeout falsely looks complete');
+assert(document.querySelector('.analysis-score').textContent === 'L wins', 'Timeout discarded WDL');
+assert(panel.scoreText({ score: -29994, mate_plies: 6, mate_exact: true }) === '−M3', 'Dark exact mate sign');
+assert(panel.scoreText({ score: 29993, mate_plies: 7, mate_exact: false }) === '≈M4', 'Uncertified mate must be provisional');
+assert(panel.scoreText({ score: 0, solved: true, mate_plies: null }) === 'Draw', 'Draw label');
+panel.render({ ...snapshot, running: false, phase: 'complete', mate_complete: true,
+    moves: [{ move: 5, score: 29968, solved: true, mate_exact: true, mate_plies: 32, pv: [5] }],
+});
+assert(document.querySelector('.analysis-score').textContent === 'M16', 'Final mate display');
+assert(document.querySelector('.analysis-score').title.includes('32 plies'), 'Missing exact-ply tooltip');
+assert(document.getElementById('analysis-status').textContent.includes('exact mate distances'), 'Missing final status');
+assert(document.getElementById('eval-value').textContent === 'M16', 'Bar did not update');
+document.getElementById('test-result').textContent = 'PASS: WDL, refinement, timeout retention, exact/provisional mates, draw and final status';
+</script>
+</html>

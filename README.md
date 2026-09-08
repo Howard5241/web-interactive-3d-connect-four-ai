@@ -38,7 +38,8 @@ board.
     difficulty categories and served instantly from a local bank while the engine keeps
     generating more in the background. See [Puzzle mode](#puzzle-mode).
 *   **Live analysis.** A left-hand evaluation bar and a right-hand panel of ranked
-    moves and expandable continuations. V3 deepens by two plies per iteration.
+    moves and expandable continuations. V4 searches every depth; displayed evals
+    use even depths for Light and odd depths for Dark.
     See [Analysis mode](#analysis-mode).
 *   **Shared rooms.** The board lives on the server, not in one browser, so everyone on
     the page sees the same game. See [Shared rooms](#shared-rooms).
@@ -76,7 +77,9 @@ Endpoints:
 *   `POST /api/set_state` - set the session's board and move history, used to sync
     before asking for an AI move.
 *   `POST /api/analysis/start` - validate `{moves: [0..15, ...], top: 1..16}` and
-    start a background V3 job; returns an opaque `job_id` (202).
+    start a background V4 job; returns an opaque `job_id` (202). `top` is validated
+    and echoed but does not size the search: snapshots always carry every ranked root
+    move, and the caller decides how many to show.
 *   `GET /api/analysis/<job_id>` - latest completed iteration and heartbeat.
 *   `POST /api/analysis/<job_id>/stop` - cancel and release an analysis job.
 *   `GET /api/room/state` - poll a room for changes; doubles as the presence heartbeat.
@@ -138,8 +141,13 @@ first. Automatic opponents are suspended while this tab is analyzing.
     favor Light (X), negative values favor Dark (O), regardless of whose turn it is.
     Heuristic scores are **raw engine units**, not chess pawns or win probabilities.
     The bar uses a smooth, bounded visualization of these scores, not a calibrated
-    probability model. `M<n>` is a proved win in n moves by the winner, not a promise
-    of shortest mate; WDL-only proofs are labeled `L wins` / `D wins`.
+    probability model. **`M<n>` is an exact mate distance** once refinement is
+    certified: the winner mates as quickly as possible and the defender delays
+    as long as possible, conditional on the row's root move being played.
+    `n` counts moves by the winner; hover for the exact number of plies, including
+    that root move. `−M<n>` favors Dark. **`≈M<n>` is provisional**: the outcome
+    is proved but shortest-mate refinement has not finished. WDL-only proofs
+    remain `L wins` / `D wins`; proved draws are labeled `Draw`.
 * The **⚙** button in the panel's top-right corner opens the analysis settings; every
     analysis option lives there. It is personal to this tab and is not shared.
 * **Best-move indicator** (on by default) marks the engine's current top move on the
@@ -153,13 +161,46 @@ first. Automatic opponents are suspended while this tab is analyzing.
     position, or a column that is full in the displayed position).
 * Choose 1, 3, 5, 8, or 16 top moves. All legal root moves are evaluated with full
     windows, then ranked for the **side to move**. Rows are never speculative
-    alpha-beta bounds. Expand a row for the continuation and a **Play column** button.
+    alpha-beta bounds. Expand a row for the continuation and its two play buttons.
     Columns are numbered exactly like move history. Lines may be shorter than
     the search depth when a tactical result or transposition-table cutoff ends them.
-* The search retains its transposition table while deepening through **2, 4, 6,
-    … plies**. Only completed iterations are published, preventing partly searched
-    root moves from being compared at different depths. Two-ply increments reduce
-    parity oscillation but cannot eliminate legitimate evaluation changes.
+* **Play column** plays that one move. **Play line (n moves)** plays the whole
+    continuation — both sides — onto the shared board in one step, with no drop
+    animation, the same as any other multi-move change. It appears only when the line
+    is longer than one move, since a one-move line is what the first button already
+    does. Both replace the future history when you are reviewing an earlier position,
+    and both push once, so another viewer moving first is still detected. A line stops
+    at the move that ends the game rather than running past it; if the rest of a line
+    cannot be played from the position on screen, what did play is kept and the log
+    says so.
+    Because every column is valued anyway, this setting is **display only**: changing
+    it re-ranks the rows already on screen and never restarts the search, so a running
+    analysis keeps its table, its depth and any proof progress. The server always
+    collects all sixteen ranked rows; each tab draws as many as it is set to show.
+* The search retains its transposition table while deepening through **1, 2, 3,
+    … plies**. The server keeps completed **even depths (2, 4, 6, …) for Light's
+    turn** and **odd depths (1, 3, 5, …) for Dark's turn** for display. This keeps
+    the nominal leaf side consistent across turns. Fully proved results and game
+    over are always shown, even if the engine stops on the other parity. Filtering
+    reduces parity oscillation but cannot eliminate legitimate evaluation changes.
+* The engine is the **balanced V4 solver** (arena id `v4-balanced`): gravity-aware
+    ordering in the exact search, plus one bounded win/draw/loss proof attempt after
+    depth 8 once the board holds 22 or more stones. That attempt gets half the
+    remaining clock. If it succeeds, the panel jumps straight from depth 8 to proved
+    values for every column; if it does not, ordinary deepening resumes at depth 9
+    having spent that half. Depth therefore appears to stall at 8 for the duration
+    of the attempt — the search is running, not stuck.
+* After **all root outcomes are proved**, analysis automatically spends the
+    remaining clock finding **exact mate distances**. The panel says
+    “Outcomes proved · finding exact mate distances.” Each completed root-move
+    distance appears immediately; unresolved rows keep their proved outcome.
+    Root ordering is provisional during this phase, then sorted by optimal
+    distance when all rows are finished. Draws do not need a mate search.
+    This extra step uses a separately tagged exact-distance TT in the same
+    64 MiB allocation: shallow scores and WDL-only proofs are never mistaken for
+    distance values. No heuristic leaves or WDL-only tempo/sterile reductions
+    are used to certify distance. A PV can still be shorter than the mate
+    distance; its length is not used to calculate the result.
 * Use arrow keys or the four history-navigation buttons to analyze earlier
     positions. Playing a move while reviewing replaces the future history on the
     **shared board**, creating a new continuation. Merely expanding a line does not
@@ -167,8 +208,10 @@ first. Automatic opponents are suspended while this tab is analyzing.
     analysis; stale results never replace the new position's evaluation.
 * **Pause** frees the engine and retains the last completed evaluation. **Resume**
     starts a new search. Hiding a tab suspends its search; returning restarts it.
-    Terminal positions have no candidate rows. Searching finishes once all root
-    values are proved, depth 64 is reached, or the 30-minute safety limit expires.
+    Terminal positions have no candidate rows. Searching finishes when all root
+    distances (or draws) are resolved, or the 30-minute safety limit expires.
+    A pause/timeout during refinement keeps the WDL results and every distance
+    already completed; it never fabricates a distance for unfinished rows.
 
 Implementation: [analysis.py](analysis.py) owns short-lived job snapshots and
 background subprocess readers; [static/js/analysis.js](static/js/analysis.js)
@@ -184,9 +227,18 @@ Build and deploy using the sibling engine's [build script](../connect4-c++/build
 with `-Tests -DeployWeb`, then restart Flask. The executable protocol is
 `analyze <comma-separated-history-or-dash> <top> [maxDepth] [milliseconds]` and
 emits one flushed JSON object per line (`iteration`, `terminal`, `done`).
+Iterations include `phase` (`search`, `mate`, `complete`) and `mate_complete`.
+`complete` retains its original meaning of all outcomes being proved; it does
+not by itself mean mate refinement finished. Rows include `mate_exact` and
+nullable `mate_plies`; a WDL score of +/-30000 is **not** mate in zero.
 Tests: `python -m unittest test_analysis test_puzzle_bank -v`; the engine integration
 tests require a deployed analysis-capable executable. The C++ V3 suite also checks
-even-depth publication, both score orientations, and legal continuations.
+every-depth publication, both score orientations, and legal continuations.
+The separate C++ mate-distance suite compares every root move against exhaustive
+DTM minimax on 300 positions, including forced losses, draws, cold/warm/color-swapped
+tables, and interrupted refinement. Python integration tests independently check
+late-game distances for both players. Serve [tests/analysis_panel.html](tests/analysis_panel.html)
+from this directory for renderer assertions without loading the neural model.
 
 ---
 

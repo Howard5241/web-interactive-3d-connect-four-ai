@@ -54,6 +54,10 @@
 .analysis-pv-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 600 12px/1.4 ui-monospace, monospace; }
 .analysis-pv { padding: 6px 0 2px; color: #cdc4b9; font: 12px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; }
 .analysis-play { margin-top: 4px; font-size: 11px; padding: 3px 8px; }
+/* Appended siblings carry no whitespace text node between them. */
+.analysis-play + .analysis-play { margin-left: 6px; }
+/* The line button is the wider-reaching of the two, so it reads as the secondary one. */
+.analysis-play-line { background: #2c2a27; color: #cdc4b9; }
 .analysis-empty { color: #a59a8e; padding: 20px; font-size: 13px; line-height: 1.7; }
 .analysis-footer { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-top: 1px solid #ffffff12; background: #201f1d; font-size: 10px; color: #969088; line-height: 1.5; }
 #analysis-stats { color: #c3b9ac; font-size: 11px; }

@@ -1,4 +1,4 @@
-"""Bounded, cancellable V3 analysis workers. HTTP only reads short snapshots.
+"""Bounded, cancellable V4 analysis workers. HTTP only reads short snapshots.
 
 Each opaque job token owns one engine/TT. A heartbeat lease reaps abandoned tabs;
 neither searches nor their stdout readers ever occupy Flask's request thread.
@@ -87,9 +87,15 @@ class AnalysisManager:
             if sum(job.process.poll() is None for job in self._jobs.values()) >= self.max_workers:
                 raise AnalysisBusy('Analysis workers are busy. Pause another analysis or retry shortly.')
             if not os.path.isfile(self.executable):
-                raise FileNotFoundError('Analysis engine is missing. Build and deploy the V3 engine first.')
+                raise FileNotFoundError('Analysis engine is missing. Build and deploy the V4 engine first.')
+            # Always take every ranked root move. Analysis values all sixteen columns
+            # regardless, so capping the engine's output here would only make the
+            # display count a search parameter: widening the panel would then have to
+            # restart the process and discard its table, depth and proof progress.
+            # `top` stays part of the request contract; the client picks how many rows
+            # of the snapshot it draws.
             process = subprocess.Popen(
-                [self.executable, 'analyze', ','.join(map(str, moves)) or '-', str(top), '64', '1800000'],
+                [self.executable, 'analyze', ','.join(map(str, moves)) or '-', '16', '64', '1800000'],
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 text=True, encoding='utf-8', bufsize=1,
                 creationflags=(getattr(subprocess, 'CREATE_NO_WINDOW', 0)
@@ -118,15 +124,23 @@ class AnalysisManager:
                         job.snapshot['timed_out'] = bool(update.get('timed_out'))
                     else:
                         received = True
+                        # Retain the last matching iteration even if HTTP polling
+                        # skips depths: Light uses even, Dark uses odd. Fully
+                        # proved results and per-move mate refinements bypass
+                        # heuristic parity: their depth is not a heuristic horizon.
+                        if (update['type'] == 'iteration' and not update.get('complete')
+                            and update.get('phase') != 'mate'
+                                and update['depth'] % 2 != len(job.snapshot['position']) % 2):
+                            continue
                         job.snapshot.update(update)
             code = job.process.wait(timeout=2)
             with self._lock:
                 if job.snapshot['running'] and (code != 0 or not received):
-                    job.snapshot['error'] = 'Engine analysis failed. Rebuild and deploy the V3 engine.'
+                    job.snapshot['error'] = 'Engine analysis failed. Rebuild and deploy the V4 engine.'
         except (OSError, ValueError, subprocess.TimeoutExpired):
             with self._lock:
                 if job.snapshot['running']:
-                    job.snapshot['error'] = 'Invalid engine response. Rebuild and deploy the V3 engine.'
+                    job.snapshot['error'] = 'Invalid engine response. Rebuild and deploy the V4 engine.'
         finally:
             self._terminate(job)
             job.process.wait()
@@ -185,7 +199,7 @@ def analysis_blueprint(manager):
         except AnalysisBusy as error:
             return jsonify(error=str(error)), 429
         except OSError:
-            return jsonify(error='Analysis engine unavailable. Build and deploy the V3 engine first.'), 503
+            return jsonify(error='Analysis engine unavailable. Build and deploy the V4 engine first.'), 503
 
     @api.get('/api/analysis/<token>')
     def status(token):

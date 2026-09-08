@@ -425,7 +425,8 @@ function init() {
     window.addEventListener('keydown', handleKeyDown);
     MOVE_INPUT.addEventListener('keydown', handleMoveInputChange);
 
-    analysis = new AnalysisPanel(onWindowResize, column => handlePlayerMove(column), setBestMove);
+    analysis = new AnalysisPanel(onWindowResize, column => handlePlayerMove(column), setBestMove,
+        line => handlePlayEngineLine(line));
     for (const [id, delta] of [
         ['analysis-first', () => -currentMoveIndex],
         ['analysis-back', () => -1],
@@ -1390,6 +1391,55 @@ async function handlePlayerMove(column) {
             setTimeout(() => requestMinimaxMove(), 100);
         }
     }
+}
+
+/**
+ * Play a whole engine continuation onto the shared board in one step.
+ *
+ * The multi-move twin of handlePlayerMove: analysis rows are continuations of the
+ * position on screen, so this replaces the future exactly the same way, but pushes
+ * once instead of once per move. getStateFromMoves applies the line from the viewed
+ * position and stops at the first unplayable move or at game over, so a line ending
+ * in mate lands on the mate rather than running past it. Reachable only from the
+ * analysis panel, so the auto-opponents handlePlayerMove triggers do not apply.
+ */
+async function handlePlayEngineLine(line) {
+    if (isRequestInProgress || isPuzzleMode || !Array.isArray(line) || !line.length) return;
+
+    const [, isTerminalBeforeMove] = game.getValueAndTerminated(boardState);
+    if (isTerminalBeforeMove) {
+        logMessage('Game is over. Please start a new game.');
+        return;
+    }
+
+    const base = moveHistory.slice(0, currentMoveIndex);
+    const { state, appliedMoves } = game.getStateFromMoves([...base, ...line]);
+    const played = appliedMoves.slice(base.length);
+    if (!played.length) {
+        logMessage('That line cannot be played from this position.');
+        return;
+    }
+    const [, endedTheGame] = game.getValueAndTerminated(state);
+
+    setButtonsDisabled(true);
+    boardState = state;
+    moveHistory = appliedMoves;
+    currentMoveIndex = appliedMoves.length;
+
+    // Several moves at once get no drop animation, the same as a multi-move remote
+    // change; a single falling piece would misrepresent what just happened.
+    updateBoard(boardState);
+    updateMoveHistory(moveHistory);
+
+    isRequestInProgress = true;
+    const pushed = await pushBoard({ log: `played the engine's line: ${played.map(columnTag).join(' ')}.` });
+    isRequestInProgress = false;
+    if (!pushed.ok) return;
+
+    if (played.length < line.length && !endedTheGame) {
+        logMessage('The rest of the line was not playable from this position.');
+    }
+    checkGameOver(null, 'Your turn! Click a column or let the AI play.');
 }
 
 // function to handle the AI move request
