@@ -31,9 +31,15 @@ board.
 *   **Visual settings.** Piece size and opacity, drop-animation toggle, and two
     occlusion aids: an outline ring drawn where a piece is hidden behind another, and a
     mask that dims the occluding piece. Both are adjustable down to off.
+*   **Column numbering.** Columns are 0–15; **Columns Start at 1** in the settings panel
+    relabels them 1–16 for this tab. Display only — everything under the UI, puzzle files
+    included, stays 0-based. See [`columnLabels.js`](static/js/columnLabels.js).
 *   **Puzzle mode.** Tactical puzzles produced by the C++ engine, grouped into four
     difficulty categories and served instantly from a local bank while the engine keeps
     generating more in the background. See [Puzzle mode](#puzzle-mode).
+*   **Live analysis.** A left-hand evaluation bar and a right-hand panel of ranked
+    moves and expandable continuations. V3 deepens by two plies per iteration.
+    See [Analysis mode](#analysis-mode).
 *   **Shared rooms.** The board lives on the server, not in one browser, so everyone on
     the page sees the same game. See [Shared rooms](#shared-rooms).
 
@@ -69,6 +75,10 @@ Endpoints:
     move out of stdout.
 *   `POST /api/set_state` - set the session's board and move history, used to sync
     before asking for an AI move.
+*   `POST /api/analysis/start` - validate `{moves: [0..15, ...], top: 1..16}` and
+    start a background V3 job; returns an opaque `job_id` (202).
+*   `GET /api/analysis/<job_id>` - latest completed iteration and heartbeat.
+*   `POST /api/analysis/<job_id>/stop` - cancel and release an analysis job.
 *   `GET /api/room/state` - poll a room for changes; doubles as the presence heartbeat.
 *   `POST /api/room/state` - push a partial state patch to a room.
 *   `POST /api/room/leave` - drop a viewer from the presence list on tab close.
@@ -115,6 +125,68 @@ planning ghosts, puzzle mode and its progress, plus an engine lock.
 Transport is polling (about 0.4s when the tab is visible, 2.5s when it is hidden) rather
 than websockets, because the single-threaded dev server has only one worker and a
 long-lived stream would occupy it.
+
+---
+
+## Analysis mode
+
+Click **Analysis** to analyze the displayed position. The switch is personal to
+this tab; the board and history still belong to the shared room. Exit Puzzle Mode
+first. Automatic opponents are suspended while this tab is analyzing.
+
+* The bar uses the same Light/Dark orange colors as the pieces. Positive values
+    favor Light (X), negative values favor Dark (O), regardless of whose turn it is.
+    Heuristic scores are **raw engine units**, not chess pawns or win probabilities.
+    The bar uses a smooth, bounded visualization of these scores, not a calibrated
+    probability model. `M<n>` is a proved win in n moves by the winner, not a promise
+    of shortest mate; WDL-only proofs are labeled `L wins` / `D wins`.
+* The **⚙** button in the panel's top-right corner opens the analysis settings; every
+    analysis option lives there. It is personal to this tab and is not shared.
+* **Best-move indicator** (on by default) marks the engine's current top move on the
+    board with a slowly glowing bead in the colour of the side to move (a lightened cream
+    for Light, Dark orange's own colour for Dark). It pulses rather than sitting still and
+    never reaches full strength, so it reads as an annotation rather than as a played
+    piece, and it never fades out completely either. The colour tracks the turn even when
+    the same column stays best across a move. It follows the position on screen, not the position the
+    engine was given: rewinding history or playing a move re-aims it, and it is hidden
+    whenever there is nothing to point at (no completed iteration yet, a terminal
+    position, or a column that is full in the displayed position).
+* Choose 1, 3, 5, 8, or 16 top moves. All legal root moves are evaluated with full
+    windows, then ranked for the **side to move**. Rows are never speculative
+    alpha-beta bounds. Expand a row for the continuation and a **Play column** button.
+    Columns are numbered exactly like move history. Lines may be shorter than
+    the search depth when a tactical result or transposition-table cutoff ends them.
+* The search retains its transposition table while deepening through **2, 4, 6,
+    … plies**. Only completed iterations are published, preventing partly searched
+    root moves from being compared at different depths. Two-ply increments reduce
+    parity oscillation but cannot eliminate legitimate evaluation changes.
+* Use arrow keys or the four history-navigation buttons to analyze earlier
+    positions. Playing a move while reviewing replaces the future history on the
+    **shared board**, creating a new continuation. Merely expanding a line does not
+    change the board. Remote moves, undo, reset, and imported histories restart
+    analysis; stale results never replace the new position's evaluation.
+* **Pause** frees the engine and retains the last completed evaluation. **Resume**
+    starts a new search. Hiding a tab suspends its search; returning restarts it.
+    Terminal positions have no candidate rows. Searching finishes once all root
+    values are proved, depth 64 is reached, or the 30-minute safety limit expires.
+
+Implementation: [analysis.py](analysis.py) owns short-lived job snapshots and
+background subprocess readers; [static/js/analysis.js](static/js/analysis.js)
+polls every 700 ms without holding Flask's single HTTP worker. Each job owns a
+64 MiB TT. At most two engines run per server process; additional requests get a
+clear 429 response. Engines run below normal priority on Windows. A 20-second
+heartbeat lease kills abandoned jobs (including interrupted start requests).
+These limits are per Flask process; multi-process hosting would need shared job
+routing. Existing synchronous neural/minimax requests can still delay HTTP
+responses; analysis itself does not block the request thread.
+
+Build and deploy using the sibling engine's [build script](../connect4-c++/build.ps1)
+with `-Tests -DeployWeb`, then restart Flask. The executable protocol is
+`analyze <comma-separated-history-or-dash> <top> [maxDepth] [milliseconds]` and
+emits one flushed JSON object per line (`iteration`, `terminal`, `done`).
+Tests: `python -m unittest test_analysis test_puzzle_bank -v`; the engine integration
+tests require a deployed analysis-capable executable. The C++ V3 suite also checks
+even-depth publication, both score orientations, and legal continuations.
 
 ---
 
@@ -196,7 +268,10 @@ list; the app itself only needs flask, torch and numpy.
 ├── puzzles/                # puzzle bank, mate_in_<k>.txt
 ├── static/
 │   ├── css/style.css
+│   ├── css/analysis.css
 │   ├── js/
+│   │   ├── analysis.js     # analysis panel, engine request loop
+│   │   ├── columnLabels.js # 0- vs 1-based column numbering, display side only
 │   │   ├── gameLogic.js    # client-side rules mirror
 │   │   ├── main.js         # scene, input, game flow, puzzle mode, settings
 │   │   └── sync.js         # room protocol, client half

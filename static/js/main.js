@@ -3,6 +3,13 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { ConnectFour3D } from './gameLogic.js';
 import { RoomSync } from './sync.js';
+import { AnalysisPanel } from './analysis.js';
+import {
+    columnRange, columnTag, formatColumn, formatColumns,
+    onColumnNumberingChange, parseColumn, setColumnText, setOneIndexed,
+} from './columnLabels.js';
+
+let analysis = null;
 
 // --- GLOBAL VARIABLES ---
 let scene, camera, renderer, controls;
@@ -50,6 +57,7 @@ let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTO
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
 let PIECE_SIZE_SLIDER, PIECE_SIZE_VALUE, PIECE_OPACITY_SLIDER, PIECE_OPACITY_VALUE, AUTO_AI_TOGGLE, AUTO_MINIMAX_TOGGLE, DROP_ANIMATION_TOGGLE;
 let OUTLINE_THICKNESS_SLIDER, OUTLINE_THICKNESS_VALUE, MASK_OPACITY_SLIDER, MASK_OPACITY_VALUE;
+let COLUMN_NUMBERING_TOGGLE, COLUMN_NUMBERING_NOTE;
 
 let gameSettings = {
     pieceSize: 1.0,
@@ -65,6 +73,28 @@ let gameSettings = {
 let activeDrops = [];            // in-flight piece drops: { mesh, startY, endY, start, duration }
 const DROP_SPAWN_Y = 6.5;        // fixed height above the grid where a played piece spawns
 const DROP_DURATION_MS = 450;    // time for a piece to fall to its cell
+
+// --- BEST-MOVE INDICATOR (analysis mode) ---
+// A bead marking the engine's current top move, breathing in and out so it reads as an
+// annotation rather than as a piece someone has played. The panel only ever tells us the
+// column; the cell it lands in is recomputed from the board every frame, so navigating
+// history or playing a move re-aims the marker without the engine having to report again.
+// The marker wears the colour of the side whose move it is: the lightened cream for Light,
+// so it does not vanish into the dark background at its faintest, and Dark orange's own
+// piece colour for Dark, so the two sides can never be mistaken for one another.
+const BEST_MOVE_LIGHT_COLOR = 0xffe6c2;
+const BEST_MOVE_DARK_COLOR = 0x9c5a2a;
+const BEST_MOVE_CYCLE_MS = 3600;       // one full breath: slow enough to read as a glow, not a blink
+const BEST_MOVE_SWAP_MS = 240;         // fade-out before the marker moves to another cell
+const BEST_MOVE_MIN_OPACITY = 0.4;     // faintest point of the breath -- never fades away entirely
+const BEST_MOVE_MAX_OPACITY = 0.65;    // stays plainly a hint, never as solid as a played piece
+const BEST_MOVE_SCALE = 0.94;          // slightly inside a real piece, so a hover preview
+                                       // over the same cell never z-fights with it
+let bestMoveColumn = null;   // column the engine likes, or null when there is nothing to show
+let bestMoveMesh = null;
+let bestMoveCell = null;     // cell the mesh currently occupies, as [depth, row, col]
+let bestMovePresence = 0;    // 0..1: how far the marker has faded in
+let bestMoveLastFrame = 0;   // performance.now() at the previous update
 
 // --- PIECE MODEL ---
 // Pieces are drawn from an FBX model. The loaded geometry is normalised to a unit
@@ -205,6 +235,8 @@ function init() {
     OUTLINE_THICKNESS_VALUE = document.getElementById('outline-thickness-value');
     MASK_OPACITY_SLIDER = document.getElementById('mask-opacity-slider');
     MASK_OPACITY_VALUE = document.getElementById('mask-opacity-value');
+    COLUMN_NUMBERING_TOGGLE = document.getElementById('column-numbering-toggle');
+    COLUMN_NUMBERING_NOTE = document.getElementById('column-numbering-note');
 
     // Puzzle Mode Elements
     const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
@@ -373,8 +405,45 @@ function init() {
         logMessage(`Piece drop animation ${gameSettings.dropAnimation ? 'enabled' : 'disabled'}.`);
     });
 
+    // Purely a relabelling: the board, the history and everything sent to the server stay
+    // 0-based, so nothing here touches the position.
+    COLUMN_NUMBERING_TOGGLE.addEventListener('change', (event) => {
+        setOneIndexed(event.target.checked);
+    });
+
+    // Text that is written once and left alone has to be redrawn by hand. The log and the
+    // status line re-render themselves from their column tags; the analysis panel redraws
+    // its own lines; these are the rest.
+    onColumnNumberingChange(() => {
+        redrawCornerLabels();
+        updateMoveHistory(moveHistory);
+        refreshColumnNumberingHints();
+        logMessage(`Columns are now numbered ${columnRange()}.`);
+    });
+    refreshColumnNumberingHints();
+
     window.addEventListener('keydown', handleKeyDown);
     MOVE_INPUT.addEventListener('keydown', handleMoveInputChange);
+
+    analysis = new AnalysisPanel(onWindowResize, column => handlePlayerMove(column), setBestMove);
+    for (const [id, delta] of [
+        ['analysis-first', () => -currentMoveIndex],
+        ['analysis-back', () => -1],
+        ['analysis-next', () => 1],
+        ['analysis-last', () => moveHistory.length - currentMoveIndex],
+    ]) {
+        document.getElementById(id).addEventListener('click', () => {
+            if (!isRequestInProgress && !isPuzzleMode) navigateHistory(delta());
+        });
+    }
+    document.getElementById('analysis-toggle').addEventListener('click', () => {
+        if (isPuzzleMode) {
+            logMessage('Exit Puzzle Mode before starting analysis.');
+            return;
+        }
+        analysis.setPosition(moveHistory.slice(0, currentMoveIndex));
+        analysis.setEnabled(!analysis.enabled);
+    });
 
     if (!pieceModelLoaded) {
         logMessage('Piece model unavailable — using default spheres.');
@@ -388,11 +457,23 @@ function init() {
     animate();
 }
 
+// The move box's placeholder and the note under the settings toggle both quote the
+// numbering, so both are rewritten whenever it changes.
+function refreshColumnNumberingHints() {
+    const example = formatColumns([1, 3, 12, 15]);
+    MOVE_INPUT.placeholder = `e.g., ${example} or ${example.replace(/ /g, ',')}`;
+    COLUMN_NUMBERING_NOTE.textContent = 'Display only — the board labels, move history, log '
+        + `and analysis panel number the columns ${columnRange()}.`;
+}
+
+// Copied in the numbering on screen, and read back the same way by the move box, so a
+// copied position pastes back into the same position it came from.
 async function copyMoveHistory() {
-    const movesString = moveHistory.slice(0, currentMoveIndex).join(' ');
+    const moves = moveHistory.slice(0, currentMoveIndex);
+    const movesString = formatColumns(moves);
     try {
         await navigator.clipboard.writeText(movesString);
-        logMessage(`Copied moves to clipboard: ${movesString}`);
+        logMessage(`Copied moves to clipboard: ${moves.map(columnTag).join(' ')}`);
         // Optional: Visual feedback
         const originalText = COPY_MOVES_BTN.textContent;
         COPY_MOVES_BTN.textContent = '✅';
@@ -523,6 +604,10 @@ function makeTextSprite(text) {
 // Label the four bottom-layer corner columns (0, 3, 12, 15). Each number sits
 // diagonally outside its corner cell so it reads as belonging to that column.
 // A column index maps to grid coords: x = col % 4, z = floor(col / 4).
+// The numbers themselves follow the column-numbering setting; the columns they mark
+// do not.
+let cornerLabels = [];   // the four sprites, kept so a relabelling can replace them
+
 function drawCornerLabels() {
     const out = 1.2; // how far outside the grid (grid spans -0.5..3.5) to place labels
     const labels = [
@@ -532,10 +617,23 @@ function drawCornerLabels() {
         { n: 15, x: 3 + out,  z: 3 + out },  // corner cell (x=3, z=3)
     ];
     for (const l of labels) {
-        const sprite = makeTextSprite(String(l.n));
+        const sprite = makeTextSprite(formatColumn(l.n));
         sprite.position.set(l.x, 0, l.z); // y = 0 is the bottom layer
         scene.add(sprite);
+        cornerLabels.push(sprite);
     }
+}
+
+// Each label bakes its number into a canvas texture, so changing the numbering means
+// building the sprites again rather than editing them.
+function redrawCornerLabels() {
+    for (const sprite of cornerLabels) {
+        scene.remove(sprite);
+        sprite.material.map.dispose();
+        sprite.material.dispose();
+    }
+    cornerLabels = [];
+    drawCornerLabels();
 }
 
 function clearGhostPieces() {
@@ -563,6 +661,7 @@ function createClickTargets() {
 // piece; if the drop animation is enabled that piece spawns above the grid and
 // falls into place instead of appearing instantly.
 function updateBoard(boardState, dropCoords = null) {
+    analysis?.setPosition(moveHistory.slice(0, currentMoveIndex));
     // Any in-flight drops reference pieces we are about to remove -- drop them.
     activeDrops = [];
 
@@ -831,7 +930,7 @@ function updateMoveHistory(newMoveHistory) {
             moveBox.classList.add('current-move');
         }
 
-        moveBox.textContent = move;
+        moveBox.textContent = formatColumn(move);
         MOVE_HISTORY_BOX.appendChild(moveBox);
     });
     MOVE_HISTORY_BOX.scrollTop = MOVE_HISTORY_BOX.scrollHeight;
@@ -1100,15 +1199,18 @@ function renderConnection(status) {
 
 function renderRemoteLog(entries) {
     entries.forEach(e => {
-        STATUS_MSG.textContent = `${e.name}: ${e.text}`;
+        setColumnText(STATUS_MSG, `${e.name}: ${e.text}`);
         const line = document.createElement('p');
         line.className = 'log-remote';
         const who = document.createElement('span');
         who.className = 'log-author';
         who.style.color = e.color;
         who.textContent = `${e.name}: `;
-        line.appendChild(who);
-        line.appendChild(document.createTextNode(e.text));
+        // The writer may be on the other numbering, so the columns arrive as tags and
+        // are rendered here, in this viewer's terms.
+        const said = document.createElement('span');
+        setColumnText(said, e.text);
+        line.append(who, said);
         LOG_BOX.appendChild(line);
         LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
     });
@@ -1117,13 +1219,15 @@ function renderRemoteLog(entries) {
 
 // --- GAME LOGIC & SERVER COMMUNICATION ---
 
+// Columns in `message` are written as tags (see columnLabels.js), so a line already on
+// screen still reads correctly after the numbering is switched.
 function logMessage(message) {
     // Update the main status message
-    STATUS_MSG.textContent = message;
+    setColumnText(STATUS_MSG, message);
 
     // Create and add the log entry to the scroll box
     const logEntry = document.createElement('p');
-    logEntry.textContent = `> ${message}`;
+    setColumnText(logEntry, `> ${message}`);
     LOG_BOX.appendChild(logEntry);
 
     // Automatically scroll to the bottom of the log box
@@ -1221,11 +1325,11 @@ async function undoLastMove() {
     updateBoard(boardState);
     updateMoveHistory(moveHistory);
 
-    await pushBoard({ log: `took back the move in column ${lastMove}.` });
+    await pushBoard({ log: `took back the move in column ${columnTag(lastMove)}.` });
 
     isRequestInProgress = false;
     setButtonsDisabled(false);
-    logMessage(`Undid last move: ${lastMove}`);
+    logMessage(`Undid last move: ${columnTag(lastMove)}`);
 }
 
 async function handlePlayerMove(column) {
@@ -1237,7 +1341,7 @@ async function handlePlayerMove(column) {
         return;
     }
 
-    if (currentMoveIndex !== moveHistory.length) {
+    if (currentMoveIndex !== moveHistory.length && !analysis?.enabled) {
         logMessage('You must be at the most recent move to play.');
         return;
     }
@@ -1259,6 +1363,7 @@ async function handlePlayerMove(column) {
 
     // Apply move locally
     const dropCoords = game.getLandingPosition(boardState, column);
+    if (analysis?.enabled) moveHistory = moveHistory.slice(0, currentMoveIndex);
     boardState = game.getNextState(boardState, column);
     moveHistory.push(column);
     currentMoveIndex++;
@@ -1271,17 +1376,17 @@ async function handlePlayerMove(column) {
     // The lock covers the round trip: a second click landing mid-flight would push a
     // move built on a board the server has already refused.
     isRequestInProgress = true;
-    const pushed = await pushBoard({ log: `played column ${column}.` });
+    const pushed = await pushBoard({ log: `played column ${columnTag(column)}.` });
     isRequestInProgress = false;
     if (!pushed.ok) return;
 
     // Check for game over locally
     if (!checkGameOver('You win!', 'Your turn! Click a column or let the AI play.')) {
         // If auto-play is on, and the game is not over, trigger the appropriate AI move
-        if (gameSettings.autoAIMove) {
+        if (gameSettings.autoAIMove && !analysis?.enabled) {
             // Use a timeout to give the player a moment to see their move
             setTimeout(() => requestAIMove(), 100);
-        } else if (gameSettings.autoMinimaxMove) {
+        } else if (gameSettings.autoMinimaxMove && !analysis?.enabled) {
             setTimeout(() => requestMinimaxMove(), 100);
         }
     }
@@ -1289,7 +1394,7 @@ async function handlePlayerMove(column) {
 
 // function to handle the AI move request
 async function requestAIMove() {
-    if (isRequestInProgress) return;
+    if (isRequestInProgress || analysis?.enabled) return;
 
     if (previewPiece) {
         scene.remove(previewPiece);
@@ -1347,7 +1452,7 @@ async function requestAIMove() {
         updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
-        const pushed = await pushBoard({ log: `let the AI play column ${move}.` });
+        const pushed = await pushBoard({ log: `let the AI play column ${columnTag(move)}.` });
         if (!pushed.ok) return;
 
         if (!checkGameOver('AI wins!', 'Your turn! Click a column or let the AI play.')) {
@@ -1366,7 +1471,7 @@ async function requestAIMove() {
 
 // function to handle the minimax move request
 async function requestMinimaxMove() {
-    if (isRequestInProgress) return;
+    if (isRequestInProgress || analysis?.enabled) return;
 
     if (previewPiece) {
         scene.remove(previewPiece);
@@ -1418,7 +1523,7 @@ async function requestMinimaxMove() {
         updateBoard(boardState, dropCoords);
         updateMoveHistory(moveHistory);
 
-        const pushed = await pushBoard({ log: `let the minimax engine play column ${move}.` });
+        const pushed = await pushBoard({ log: `let the minimax engine play column ${columnTag(move)}.` });
         if (!pushed.ok) return;
 
         if (!checkGameOver('Minimax AI wins!', 'Your turn! Click a column or let the AI play.')) {
@@ -1478,17 +1583,18 @@ function handleMoveInputChange(event) {
         return; // Do nothing if input is empty
     }
 
-    // Moves may be separated by spaces, commas, or a mix of the two.
+    // Moves may be separated by spaces, commas, or a mix of the two. They are read in the
+    // numbering on screen, so a list copied out of the move box pastes straight back in.
     const tokens = movesString.split(/[\s,]+/).filter(t => t.length);
-    if (!tokens.every(t => /^\d+$/.test(t))) {
-        logMessage('Invalid move list: expected numbers separated by spaces or commas.');
+    const moves = tokens.map(parseColumn);
+    if (moves.some(move => move === null)) {
+        logMessage(`Invalid move list: expected columns ${columnRange()}, separated by spaces or commas.`);
         return;
     }
-    const moves = tokens.map(Number);
 
     // Immediately clear the input and show loading state
     MOVE_INPUT.value = '';
-    logMessage(`Loading position from moves: ${movesString}`);
+    logMessage(`Loading position from moves: ${moves.map(columnTag).join(' ')}`);
     setButtonsDisabled(true);
     isRequestInProgress = true;
 
@@ -1508,7 +1614,7 @@ function handleMoveInputChange(event) {
 
     // Loading a position replaces the board outright, so don't make it conditional on
     // the room's version -- the point is to put everyone on this position.
-    pushBoard({ expect: false, log: `loaded a position: ${appliedMoves.join(' ') || '(empty board)'}` });
+    pushBoard({ expect: false, log: `loaded a position: ${appliedMoves.map(columnTag).join(' ') || '(empty board)'}` });
 
     setButtonsDisabled(false);
     isRequestInProgress = false;
@@ -1518,7 +1624,7 @@ function handleMoveInputChange(event) {
 
 function handleKeyDown(event) {
     // Prevent arrow key navigation when the input is focused
-    if (document.activeElement === MOVE_INPUT) {
+    if (document.activeElement?.matches('input, select, textarea, [contenteditable="true"]')) {
         return;
     }
     if (isRequestInProgress) return;
@@ -1532,9 +1638,10 @@ function handleKeyDown(event) {
 }
 
 function onWindowResize() {
-    camera.aspect = window.innerWidth / window.innerHeight;
+    const container = document.getElementById('scene-container');
+    camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setSize(container.clientWidth, container.clientHeight);
 }
 
 function onColumnClick(event) {
@@ -1547,8 +1654,9 @@ function onColumnClick(event) {
     }
 
     const mouse = new THREE.Vector2();
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
@@ -1618,8 +1726,9 @@ function onMouseMove(event) {
     if (isRequestInProgress) return;
 
     const mouse = new THREE.Vector2();
-    mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-    mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(mouse, camera);
@@ -1665,9 +1774,95 @@ async function showPreview(column) {
     scene.add(previewPiece);
 }
 
+// --- BEST-MOVE INDICATOR ---
+
+// Called by the analysis panel with its current top move, or null to show nothing.
+function setBestMove(column) {
+    bestMoveColumn = Number.isInteger(column) ? column : null;
+}
+
+// The cell the marker belongs in right now, or null if there is nothing to mark. The
+// column can be unplayable on the position currently on screen (the engine analysed a
+// later position, or history was rewound), in which case nothing is drawn.
+function bestMoveTarget() {
+    if (bestMoveColumn === null || !analysis?.enabled || isPuzzleMode) return null;
+    return game.getLandingPosition(boardState, bestMoveColumn);
+}
+
+const sameCell = (a, b) => a === b || (!!a && !!b && a[0] === b[0] && a[1] === b[1] && a[2] === b[2]);
+
+// Whose turn it is in the position on screen. Counted off the board so a reviewed,
+// imported or remote position reads correctly, and counted by hand so that running it
+// every frame costs nothing (game.getCurrentPlayer allocates through flat()/filter()).
+function sideToMoveOnBoard() {
+    let placed = 0;
+    for (let d = 0; d < 4; d++) {
+        for (let r = 0; r < 4; r++) {
+            for (let c = 0; c < 4; c++) if (boardState[d][r][c] !== 0) placed++;
+        }
+    }
+    return placed % 2 === 0 ? 1 : -1;
+}
+
+function updateBestMoveIndicator() {
+    const now = performance.now();
+    // Clamp the step: a backgrounded tab resumes with an enormous gap, which would snap
+    // the fade rather than animate it.
+    const dt = Math.min(now - (bestMoveLastFrame || now), 100);
+    bestMoveLastFrame = now;
+
+    const target = bestMoveTarget();
+    // The marker never jumps mid-breath: when the engine changes its mind it fades out
+    // where it stood, and only then reappears on the new cell.
+    if (sameCell(target, bestMoveCell) && target) {
+        bestMovePresence = Math.min(1, bestMovePresence + dt / BEST_MOVE_SWAP_MS);
+    } else {
+        bestMovePresence = Math.max(0, bestMovePresence - dt / BEST_MOVE_SWAP_MS);
+        if (bestMovePresence === 0) bestMoveCell = target;
+    }
+
+    if (!bestMoveCell || bestMovePresence <= 0.001) {
+        if (bestMoveMesh) bestMoveMesh.visible = false;
+        return;
+    }
+
+    if (!bestMoveMesh) {
+        const material = new THREE.MeshStandardMaterial({
+            emissiveIntensity: 0.55,
+            roughness: 0.4,
+            transparent: true,
+            depthWrite: false,   // it is an annotation: never let it punch a hole in a piece
+        });
+        bestMoveMesh = new THREE.Mesh(pieceBaseGeo, material);
+        bestMoveMesh.renderOrder = 2;
+        scene.add(bestMoveMesh);
+    }
+    // Re-read every frame rather than latching it when the cell is taken up: the same
+    // column can stay best across a move, leaving the marker on the very same cell while
+    // the turn -- and so its colour -- has changed underneath it.
+    const color = sideToMoveOnBoard() === 1 ? BEST_MOVE_LIGHT_COLOR : BEST_MOVE_DARK_COLOR;
+    bestMoveMesh.material.color.setHex(color);
+    bestMoveMesh.material.emissive.setHex(color);
+    // The shared geometry is swapped once the FBX bead finishes loading, and the piece-size
+    // setting can move under us; both are picked up here rather than on a rebuild.
+    if (bestMoveMesh.geometry !== pieceBaseGeo) bestMoveMesh.geometry = pieceBaseGeo;
+
+    const [depth, row, col] = bestMoveCell;
+    bestMoveMesh.position.set(col, 3 - depth, row);
+
+    // Smoothstep the presence so neither end of the swap has a visible corner; the breath
+    // itself is a cosine, which has no corner at either extreme by construction.
+    const eased = bestMovePresence * bestMovePresence * (3 - 2 * bestMovePresence);
+    const breath = 0.5 - 0.5 * Math.cos((2 * Math.PI * (now % BEST_MOVE_CYCLE_MS)) / BEST_MOVE_CYCLE_MS);
+    bestMoveMesh.material.opacity = eased * (BEST_MOVE_MIN_OPACITY + (BEST_MOVE_MAX_OPACITY - BEST_MOVE_MIN_OPACITY) * breath);
+    bestMoveMesh.scale.setScalar(0.4 * gameSettings.pieceSize * BEST_MOVE_SCALE * (1 + 0.04 * breath));
+    bestMoveMesh.visible = true;
+}
+
 function animate() {
     requestAnimationFrame(animate);
     updateDrops();
+    updateBestMoveIndicator();
     updateOcclusionOverlays();
     controls.update(); // only required if controls.enableDamping = true
     renderer.render(scene, camera);
@@ -2052,6 +2247,7 @@ async function pollGenerationStatus() {
 // ---- Shared puzzle mode machinery ----
 
 function enterPuzzleMode() {
+    if (analysis?.enabled) analysis.setEnabled(false);
     isPuzzleMode = true;
     currentPuzzleIndex = 0;
     document.getElementById('engine-puzzle-setup').classList.add('hidden');
@@ -2178,7 +2374,7 @@ async function handlePuzzleMove(column) {
     updateBoard(boardState, dropCoords);
     updateMoveHistory(moveHistory);
     currentPuzzleSolutionIndex++;
-    pushBoard({ log: `found column ${column}.` });
+    pushBoard({ log: `found column ${columnTag(column)}.` });
 
     if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
         finishPuzzle();
@@ -2202,7 +2398,7 @@ async function handlePuzzleMove(column) {
     if (currentPuzzleSolutionIndex >= puzzle.solution.length) {
         finishPuzzle();
     } else {
-        logMessage(`Opponent replied (column ${opponentMove}). Your move — find the ${puzzle.goal === 'draw' ? 'draw' : 'win'}!`);
+        logMessage(`Opponent replied (column ${columnTag(opponentMove)}). Your move — find the ${puzzle.goal === 'draw' ? 'draw' : 'win'}!`);
     }
 }
 

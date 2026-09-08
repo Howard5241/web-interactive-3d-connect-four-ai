@@ -12,6 +12,7 @@ from ai_agent import ResNet3D, MCTS
 from puzzle_bank import (PuzzleBank, GenerationManager,
                          CATEGORIES, CATEGORY_BY_KEY, category_for_mate)
 from room_state import RoomRegistry, clean_client_id
+from analysis import AnalysisManager, analysis_blueprint
 
 # --- 1. INITIALIZATION ---
 
@@ -94,6 +95,8 @@ mcts = MCTS(game, args, model)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUZZLE_DIR = os.path.join(BASE_DIR, 'puzzles')
 ENGINE_EXE = os.path.join(BASE_DIR, 'bin', 'connect4_3D.exe')
+analysis_manager = AnalysisManager(ENGINE_EXE)
+app.register_blueprint(analysis_blueprint(analysis_manager))
 
 puzzle_bank = PuzzleBank(PUZZLE_DIR)
 generation_manager = GenerationManager(

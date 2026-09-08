@@ -645,6 +645,14 @@ h1 {
     flex-basis: 120px;
 }
 
+/* Sub-caption under a setting, for the bit of context a label has no room for. */
+.settings-content .setting-note {
+    margin: -14px 0 20px;
+    font-size: 0.8em;
+    line-height: 1.4;
+    color: #999;
+}
+
 .switch {
   position: relative;
   display: inline-block;

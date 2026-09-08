@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D Connect Four vs. AI</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/analysis.css') }}">
 </head>
 <body>
     <div id="info-panel">
@@ -22,6 +23,7 @@
             <button id="undo-btn" disabled>Undo</button>
             <button id="ai-move-btn" disabled>AI Move</button>
             <button id="minimax-move-btn" disabled>Minimax Move</button>
+            <button id="analysis-toggle" aria-pressed="false">⌕ Analysis</button>
         </div>
         
         <hr class="separator">
@@ -111,6 +113,14 @@
                         <span class="slider round"></span>
                     </label>
                 </div>
+                <div class="setting-item">
+                    <label for="column-numbering-toggle">Columns Start at 1</label>
+                    <label class="switch">
+                        <input type="checkbox" id="column-numbering-toggle">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+                <p class="setting-note" id="column-numbering-note">Display only — the board labels, move history, log and analysis panel number the columns 0–15.</p>
             </div>
         </div>
     </div>
@@ -125,12 +135,54 @@
         </div>
         <div id="move-history-box"></div>
         <input type="text" id="move-input" placeholder="e.g., 1 3 12 15 or 1,3,12,15">
+        <nav id="analysis-history-nav" aria-label="Analysis history navigation">
+            <button id="analysis-first" title="Starting position" aria-label="Starting position">|‹</button>
+            <button id="analysis-back" title="Previous move" aria-label="Previous move">‹</button>
+            <button id="analysis-next" title="Next move" aria-label="Next move">›</button>
+            <button id="analysis-last" title="Latest position" aria-label="Latest position">›|</button>
+        </nav>
     </div>
     <div id="log-container">
         <h2>Game Log</h2>
         <div id="log-box"></div>
     </div>
     <div id="scene-container"></div>
+    <div id="eval-bar-container" class="hidden" aria-label="Position evaluation">
+        <span class="eval-player">D</span>
+        <div id="eval-bar" role="meter" aria-label="Light orange advantage (heuristic, not probability)" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50">
+            <div id="eval-light"></div>
+            <span id="eval-value">—</span>
+        </div>
+        <span class="eval-player">L</span>
+    </div>
+    <aside id="analysis-panel" class="hidden" aria-label="Engine analysis">
+        <div class="analysis-toolbar">
+            <button id="analysis-pause">Pause</button>
+            <span id="analysis-depth" title="↗ Deepens 2 plies at a time · local analysis view">Depth —</span>
+            <button id="analysis-settings-btn" type="button" aria-label="Analysis settings" aria-expanded="false" aria-controls="analysis-settings" title="Analysis settings">⚙</button>
+        </div>
+        <div id="analysis-settings" class="hidden" role="dialog" aria-label="Analysis settings">
+            <div class="analysis-setting">
+                <label for="analysis-top">Top moves</label>
+                <select id="analysis-top"><option>1</option><option selected>3</option><option>5</option><option>8</option><option>16</option></select>
+            </div>
+            <div class="analysis-setting">
+                <label for="analysis-best-toggle">Best-move indicator</label>
+                <label class="switch">
+                    <input type="checkbox" id="analysis-best-toggle" checked>
+                    <span class="slider round"></span>
+                </label>
+            </div>
+            <p class="analysis-setting-note">Marks the engine's current top move on the board with a pulsing bead.</p>
+        </div>
+        <div id="analysis-status" role="status" aria-live="polite">Starting engine…</div>
+        <div id="analysis-lines"></div>
+        <footer class="analysis-footer">
+            <span id="analysis-stats">Waiting for a completed iteration</span>
+            <button type="button" class="analysis-info" aria-label="How to read these scores" title="+ favors Light orange · − favors Dark orange&#10;&#10;Scores are engine units, not pawns or win probabilities. M = proved win in the indicated number of winner’s moves (not necessarily shortest). Lines may stop at a tactical or table cutoff.">ⓘ</button>
+            <span class="engine-badge">V3 ENGINE</span>
+        </footer>
+    </aside>
 
     <!-- Import Three.js and OrbitControls -->
     <script type="importmap">
