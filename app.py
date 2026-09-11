@@ -105,6 +105,7 @@ generation_manager = GenerationManager(
     batch_seconds=float(os.environ.get('PUZZLE_BATCH_SECONDS', '120')),
     candidate_seconds=float(os.environ.get('PUZZLE_CANDIDATE_SECONDS', '20')),
     min_steps=int(os.environ.get('PUZZLE_MIN_STEPS', '2')),
+    distance_seconds=float(os.environ.get('PUZZLE_DISTANCE_SECONDS', '2')),
 )
 print(f"Puzzle bank loaded from {PUZZLE_DIR}: {puzzle_bank.counts()} "
       f"(total {puzzle_bank.total()})")

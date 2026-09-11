@@ -127,9 +127,52 @@ class PuzzleBankTests(unittest.TestCase):
         bank = PuzzleBank(self.temp.name)
         for values in [dict(candidate_seconds=121), dict(candidate_seconds=0),
                        dict(batch_seconds=float('nan')), dict(batch_seconds=float('inf')),
-                       dict(min_steps=0), dict(seeds=100001)]:
+                       dict(min_steps=0), dict(seeds=100001),
+                       dict(distance_seconds=121), dict(distance_seconds=-1),
+                       dict(distance_seconds=float('nan'))]:
             with self.subTest(values=values), self.assertRaises(ValueError):
                 GenerationManager(bank, 'unused.exe', self.temp.name, **values)
+
+    def test_batch_requests_the_distance_step(self):
+        """The engine's arguments are positional, so the distance allowance only
+        arrives if the two defaults before it are restated correctly."""
+        bank = PuzzleBank(self.temp.name)
+        manager = GenerationManager(bank, 'unused.exe', self.temp.name,
+                                    min_steps=3, distance_seconds=7)
+        captured = []
+
+        class Process:
+            returncode = 0
+
+            def kill(self):
+                pass
+
+            def communicate(self, **kwargs):
+                return '', None
+
+        def spawn(args, **kwargs):
+            captured.append(args)
+            return Process()
+
+        with patch('puzzle_bank.os.path.exists', return_value=True), \
+             patch('puzzle_bank.subprocess.Popen', side_effect=spawn):
+            manager._run_batch(26, 28)
+        self.assertEqual(captured[0][1], 'genpuzzle')
+        self.assertEqual(captured[0][-3:], ['0', '3', '7'])  # random seed, min playable, distance
+        # Zero disables the step rather than passing a zero-length deadline on.
+        manager.distance_seconds = 0
+        captured.clear()
+        with patch('puzzle_bank.os.path.exists', return_value=True), \
+             patch('puzzle_bank.subprocess.Popen', side_effect=spawn):
+            manager._run_batch(26, 28)
+        self.assertEqual(captured[0][-1], '0')
+
+    def test_distance_is_optional_and_never_blocks_loading(self):
+        """Records predate the distance step, and a batch can fail to prove one."""
+        self.write([dict(self.record, distance=9),
+                    dict(self.record, position='56:78'),
+                    dict(self.record, position='9a:bc', distance='three')])
+        self.assertEqual(len(parse_generated_file(self.path)), 3)
 
 
 if __name__ == '__main__':

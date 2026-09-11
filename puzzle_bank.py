@@ -8,6 +8,10 @@ Legacy two-line history/solution files and three-line board/history/solution
 files remain readable. Their old mate label is retained as metadata only.
 V3 appends versioned records to generated_v3.jsonl with history, solution, goal,
 steps and canonical position identity; mate=None because WDL proves no distance.
+A separate engine step writes an objective `distance` (plies to the end of the
+game under perfect play, unrelated to steps) on records it can prove in time.
+That key is optional and currently unread here -- surface it by carrying it into
+the dict built in parse_generated_file.
 """
 
 import os
@@ -308,7 +312,7 @@ class GenerationManager:
     PIECE_RANGES = [(26, 28)]
 
     def __init__(self, bank, exe_path, output_dir, seeds=400, batch_seconds: float = 120,
-                 candidate_seconds: float = 20, min_steps=2):
+                 candidate_seconds: float = 20, min_steps=2, distance_seconds: float = 2):
         self.bank = bank
         self.exe_path = exe_path
         self.output_dir = output_dir
@@ -316,10 +320,15 @@ class GenerationManager:
         self.batch_seconds = batch_seconds
         if (not math.isfinite(candidate_seconds) or not math.isfinite(batch_seconds)
             or not 0 < candidate_seconds <= 120 or batch_seconds <= 0
-            or not 1 <= seeds <= 100000 or not 1 <= min_steps <= 32):
+            or not 1 <= seeds <= 100000 or not 1 <= min_steps <= 32
+            or not math.isfinite(distance_seconds) or not 0 <= distance_seconds <= 120):
             raise ValueError('Invalid generation time budget')
         self.candidate_seconds = candidate_seconds
         self.min_steps = min_steps
+        # Per-puzzle allowance for the engine's objective-distance step, which
+        # runs after a puzzle is proved and writes the record's `distance`.
+        # Zero skips it, and those records simply carry no distance.
+        self.distance_seconds = distance_seconds
         self._control_lock = threading.Lock()  # serialize start/stop, not status reads
         self._lock = threading.Lock()
         self._proc = None                 # currently running engine subprocess (if any)
@@ -416,9 +425,14 @@ class GenerationManager:
         try:
             os.makedirs(self.output_dir, exist_ok=True)
             proc = subprocess.Popen(
+                # The engine's arguments are positional, so reaching the distance
+                # allowance means restating the two defaults before it: seed 0
+                # still means "choose one at random", and min playable length has
+                # always defaulted to min_steps.
                 [self.exe_path, 'genpuzzle', str(self.min_steps), str(self.seeds),
                  os.path.abspath(self.output_dir), str(self.batch_seconds),
-                 str(min_pieces), str(max_pieces), str(self.candidate_seconds)],
+                 str(min_pieces), str(max_pieces), str(self.candidate_seconds),
+                 '0', str(self.min_steps), str(self.distance_seconds)],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 creationflags=getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0),
             )
