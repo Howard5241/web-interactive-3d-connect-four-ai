@@ -10,7 +10,7 @@ import re
 from game_logic import ConnectFour3D
 from ai_agent import ResNet3D, MCTS
 from puzzle_bank import (PuzzleBank, GenerationManager,
-                         CATEGORIES, CATEGORY_BY_KEY, category_for_mate)
+                         CATEGORIES, CATEGORY_BY_KEY, category_for_mate, mate_length)
 from room_state import RoomRegistry, clean_client_id
 from analysis import AnalysisManager, analysis_blueprint
 
@@ -102,10 +102,10 @@ puzzle_bank = PuzzleBank(PUZZLE_DIR)
 generation_manager = GenerationManager(
     puzzle_bank, ENGINE_EXE, PUZZLE_DIR,
     seeds=int(os.environ.get('PUZZLE_SEEDS', '400')),
-    batch_seconds=float(os.environ.get('PUZZLE_BATCH_SECONDS', '120')),
-    candidate_seconds=float(os.environ.get('PUZZLE_CANDIDATE_SECONDS', '20')),
+    batch_seconds=float(os.environ.get('PUZZLE_BATCH_SECONDS', '180')),
+    candidate_seconds=float(os.environ.get('PUZZLE_CANDIDATE_SECONDS', '30')),
     min_steps=int(os.environ.get('PUZZLE_MIN_STEPS', '2')),
-    distance_seconds=float(os.environ.get('PUZZLE_DISTANCE_SECONDS', '2')),
+    distance_seconds=float(os.environ.get('PUZZLE_DISTANCE_SECONDS', '45')),
 )
 print(f"Puzzle bank loaded from {PUZZLE_DIR}: {puzzle_bank.counts()} "
       f"(total {puzzle_bank.total()})")
@@ -345,7 +345,10 @@ def get_puzzle():
         "mate": puzzle['mate'],
         "steps": puzzle['steps'],
         "goal": puzzle['goal'],
-        "category": category_for_mate(puzzle['steps']),
+        # The bucket it was drawn from, so the client's label matches the
+        # request. `mate` stays as-is: the exact mate distance is deliberately
+        # not shown to the solver, only the band the category already implies.
+        "category": category_for_mate(mate_length(puzzle)),
         "id": puzzle['id'],
         "counts": puzzle_bank.counts(),
         "category_counts": puzzle_bank.category_counts(),

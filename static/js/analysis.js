@@ -198,6 +198,36 @@ export class AnalysisPanel {
         this.el('eval-bar').setAttribute('aria-valuetext', text);
     }
 
+    // The principal variation, as coloured spans rather than one flat string: the move
+    // numbers read as scaffolding, and each column is tinted with the piece colour of the
+    // side that plays it, so whose move it is can be seen without counting plies.
+    pvNodes(row) {
+        const frag = document.createDocumentFragment();
+        if (!row.pv.length) {
+            frag.append(`Column ${formatColumn(row.move)}`);
+            return frag;
+        }
+        for (const [i, move] of row.pv.entries()) {
+            const ply = this.moves.length + i;
+            const first = ply % 2 === 0;
+            if (i > 0) frag.append(' ');
+            // Numbering leads every first-player move; a line starting mid-turn opens
+            // with an ellipsis instead so the ply count still lines up.
+            const label = first ? `${Math.floor(ply / 2) + 1}. ` : i === 0 ? `${Math.floor(ply / 2) + 1}… ` : '';
+            if (label) {
+                const number = document.createElement('span');
+                number.className = 'analysis-pv-num';
+                number.textContent = label;
+                frag.append(number);
+            }
+            const column = document.createElement('span');
+            column.className = `analysis-pv-move${first ? '' : ' p2'}`;
+            column.textContent = formatColumn(move);
+            frag.append(column);
+        }
+        return frag;
+    }
+
     render(data) {
         this.data = data;
         const terminal = data.type === 'terminal';
@@ -227,17 +257,16 @@ export class AnalysisPanel {
                     : row.solved && row.score === 0 ? 'Proved draw; no mate distance'
                     : row.solved ? 'Proved outcome; exact mate distance not yet established'
                     : 'Heuristic evaluation in engine units';
-                const line = row.pv.map((move, i) => {
-                    const ply = this.moves.length + i;
-                    return `${ply % 2 === 0 ? `${Math.floor(ply / 2) + 1}. ` : i === 0 ? `${Math.floor(ply / 2) + 1}… ` : ''}${formatColumn(move)}`;
-                }).join(' ');
+                // A fresh fragment per call: appending one empties it, and the line is
+                // shown twice (collapsed summary and expanded body).
+                const line = () => this.pvNodes(row);
                 const preview = document.createElement('span');
                 preview.className = 'analysis-pv-summary';
-                preview.textContent = line || `Column ${formatColumn(row.move)}`;
+                preview.append(line());
                 summary.append(score, preview);
                 const pv = document.createElement('div');
                 pv.className = 'analysis-pv';
-                pv.textContent = `#${rank + 1} · ${line || `Column ${formatColumn(row.move)}`}`;
+                pv.append(`#${rank + 1} · `, line());
                 const play = document.createElement('button');
                 play.className = 'analysis-play';
                 play.textContent = `Play column ${formatColumn(row.move)}`;

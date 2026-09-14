@@ -12,7 +12,7 @@
 
 const COLUMNS = 16;
 
-let oneIndexed = false;
+let oneIndexed = true;
 const listeners = new Set();
 
 export function isOneIndexed() {

@@ -2,8 +2,8 @@
 
 Without this the app is single-player-per-tab: the board lives in each browser's own
 JavaScript and the only server-side memory is the per-browser Flask session. Here the
-board, the move history, which move is being viewed, the planning ghosts and Puzzle
-Mode all live in one place that every viewer reads from and writes to.
+board, the move history, which move is being viewed, the planning ghosts, the highlighted
+lines and Puzzle Mode all live in one place that every viewer reads from and writes to.
 
 Protocol (see static/js/sync.js for the other half):
 
@@ -55,7 +55,9 @@ GUEST_COLORS = ['#ffa500', '#4fc3f7', '#a5d6a7', '#ce93d8', '#ef9a9a', '#fff59d'
 
 NUM_COLUMNS = 16
 NUM_CELLS = 64
+GRID_SIZE = 4
 MAX_PUZZLES = 400
+MAX_LINES = 76           # every four-in-a-row there is on a 4x4x4 board
 CLIENT_ID_RE = re.compile(r'^[A-Za-z0-9_-]{4,64}$')
 
 
@@ -66,6 +68,7 @@ def initial_state():
         'moves': [],           # every move played, as column indices 0-15
         'view_index': 0,       # how many of those moves are being shown
         'ghosts': [],          # right-click planning pieces, in world coordinates
+        'lines': [],           # highlighted four-in-a-rows (see _clean_lines)
         'puzzle': None,        # the puzzle set being solved (see _clean_puzzle)
         'progress': None,      # how far into it the room has got (see _clean_progress)
         'busy': None,          # {'client', 'what', 'since'} while an engine is running
@@ -119,6 +122,33 @@ def _clean_ghosts(value):
             cell[axis] = float(v)
         cell['player'] = 1 if g.get('player') == 1 else -1
         out.append(cell)
+    return out
+
+
+def _clean_cell(value, name):
+    if not isinstance(value, list) or len(value) != 3:
+        raise ValueError(f'{name} must be a [z, y, x] triple')
+    return [_clean_int(c, name, 0, GRID_SIZE - 1) for c in value]
+
+
+def _clean_lines(value):
+    """Highlighted four-in-a-rows, each as the two cells at the ends of the run.
+
+    Only the ends travel: whether those cells are actually collinear is the client's
+    business, since a line is drawn as a bar between two points either way.
+    """
+    if not isinstance(value, list):
+        raise ValueError('lines must be a list')
+    if len(value) > MAX_LINES:
+        raise ValueError('too many lines')
+    out = []
+    for line in value:
+        if not isinstance(line, dict):
+            raise ValueError('each line must be an object')
+        out.append({
+            'a': _clean_cell(line.get('a'), 'line end'),
+            'b': _clean_cell(line.get('b'), 'line end'),
+        })
     return out
 
 
@@ -199,6 +229,7 @@ _FIELD_CLEANERS = {
     'moves': _clean_moves,
     'view_index': lambda v: _clean_int(v, 'view_index', 0, NUM_CELLS),
     'ghosts': _clean_ghosts,
+    'lines': _clean_lines,
     'puzzle': _clean_puzzle,
     'progress': _clean_progress,
     'busy': _clean_busy,

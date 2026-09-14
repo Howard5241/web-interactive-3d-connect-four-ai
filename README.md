@@ -14,7 +14,8 @@ board.
 
 *   **3D board.** 4x4x4 grid rendered with three.js, with orbit/pan/zoom camera
     controls. Pieces use an FBX model (`static/models/Piece.fbx`), falling back to
-    spheres if it fails to load.
+    spheres if it fails to load. The light side is glazed clay and the dark side oak
+    veneer, textured from `static/textures/` — see [Piece textures](#piece-textures).
 *   **Two opponents.**
     *   Neural network: a `ResNet3D` policy/value network (10 residual blocks, 128
         channels, ~9.0M parameters) searched with MCTS at 500 simulations per move.
@@ -23,8 +24,17 @@ board.
     *   Minimax: the prebuilt C++ engine `bin/connect4_3D.exe`, driven over stdin.
     *   Either can be set to move automatically after yours, from the settings panel.
 *   **Move preview and planning ghosts.** Hovering a column shows where the piece will
-    land. Right-clicking a column places a translucent planning piece; right-clicking
-    empty space clears them.
+    land. Right-clicking a column places a planning piece; right-clicking empty space
+    clears them. A ghost is the same solid, full-size bead as a real piece and is told
+    apart by colour alone: the two ghosts are light and dark orange, which reads as an
+    annotation because the pieces themselves are white clay and brown oak.
+*   **Ghost lines.** Right-press one piece and release on another and, if a four-in-a-row
+    runs through both, the whole run is drawn from end to end — including the cells nobody
+    has played yet. Repeating a drag takes that line down again. Only a drag traces a
+    line — a right-*click* stays an ordinary right-click even when it lands on a piece,
+    since the ray to the top of a pole very often clips a bead further down. The camera
+    stays put for the duration of a drag, and the lines are shared and cleared exactly
+    like the planning ghosts.
 *   **History navigation.** Arrow keys step through the game. Pasting a move list
     (e.g. `1 3 12 15`) into the move-history box jumps to that position. There is an
     undo button, and buttons to copy the position as a move list or as a hex board code.
@@ -87,7 +97,8 @@ Endpoints:
 *   `POST /api/room/leave` - drop a viewer from the presence list on tab close.
 *   `GET /api/puzzle?category=<quick|medium|long|endgame>` - a random puzzle from that
     category, skipping ones recently served to this session. `?mate=<k>` still works for
-    a single mate length.
+    a single mate length. Categories group by the objective mate length in solver moves
+    (1-3, 4-5, 6-11, 12+), not by how long the recorded line happens to be.
 *   `GET /api/puzzle/counts` - puzzles available per mate length and per category, plus
     the category definitions.
 *   `POST /api/puzzle/generate/start` / `stop`, `GET /api/puzzle/generate/status` -
@@ -110,7 +121,7 @@ the relevant endpoint, and releases the lock when the move comes back.
 
 `room_state.py` (server) and `static/js/sync.js` (client) keep every browser on the site
 looking at one board. The shared state is the move list, which move is being viewed, the
-planning ghosts, puzzle mode and its progress, plus an engine lock.
+planning ghosts, the ghost lines, puzzle mode and its progress, plus an engine lock.
 
 *   **Presence.** Each tab gets an id in `sessionStorage` and is listed as "Guest N" with
     a colour. Two tabs of one browser count as two viewers. Viewers that stop polling for
@@ -260,7 +271,10 @@ files are not rewritten or deleted by the background worker.
     The move-history panel stays available, so a position can be copied out for analysis.
 *   **Where puzzles come from.** V3 samples quiet legal 26–28-piece positions, proves
     uniqueness using win/draw threshold searches, and builds the longest verified
-    continuation found within its budget. It does not optimize mate distance.
+    continuation found within its budget. Length is counted in decisions: a solver
+    move that only answers an immediate threat does not lengthen the line it is
+    ranked on, so a shorter line of real choices beats a longer forced one. It does
+    not optimize mate distance.
     Versioned records are appended to `puzzles/generated_v3.jsonl`, with symmetry-
     canonical identities for deduplication. Interrupted final records are ignored.
 *   **Background generation.** While the puzzle UI is open, the engine generates and
@@ -268,10 +282,19 @@ files are not rewritten or deleted by the background worker.
     ```
     bin/connect4_3D.exe genpuzzle 2 400 <outputDir> 30 26 28 2
     ```
-    Defaults: 30-second batches, 2 seconds total per candidate including continuation,
-    at least two playable solver moves, one below-normal-priority Windows process.
+    The engine's own CLI defaults are 30-second batches and 2 seconds total per
+    candidate including continuation; the app asks for more: 400 seeds, 180-second
+    batches, 30 seconds per candidate and a 45-second distance allowance, with at
+    least two playable solver moves, in one below-normal-priority Windows process.
     Configure `PUZZLE_SEEDS`, `PUZZLE_BATCH_SECONDS`, `PUZZLE_CANDIDATE_SECONDS`
-    (maximum 120), and `PUZZLE_MIN_STEPS` before starting Flask. Set longer batch and
+    (maximum 120), `PUZZLE_DISTANCE_SECONDS` (maximum 120, 0 disables it) and
+    `PUZZLE_MIN_STEPS` before starting Flask. The engine also curates as it
+    writes: a puzzle must show enough of its mate (a mate in 2 or 3 in full, a
+    mate in 4-5 in at least 3 steps, 6-10 in at least 5, 11+ in at least 7) and
+    every mate in 6 or more needs two solver moves that are not forced answers to
+    an immediate threat. Run `python puzzle_filter.py` to apply the same rules to
+    a bank an older build produced; it reports the damage and writes nothing
+    without `--apply`. Set longer batch and
     candidate budgets together when mining harder puzzles. Leaving puzzle mode kills
     the process immediately; a batch also has a five-second external timeout grace.
     Build/deploy from the C++ folder with `build.ps1 -Tests -DeployWeb`; see the
@@ -280,6 +303,37 @@ files are not rewritten or deleted by the background worker.
 *   **File puzzles.** "Load from File" accepts `.txt` puzzle files in either the 2-line
     (`history` / `solution`) or the engine's 3-line (`board code` / `history` / `solution`)
     format.
+
+---
+
+## Piece textures
+
+The light pieces are glazed clay (`clay_floor_001`), the dark ones oak veneer
+(`oak_veneer_01`). `textures/` holds the 4k sources; `static/textures/` holds the 512px
+copies the browser actually loads, built by `tools/build_textures.py` (Pillow). The
+sources total ~40 MB, which is absurd for beads a few dozen pixels across — the shipped
+set is ~250 KB.
+
+Two things about the maps are worth knowing before changing them:
+
+*   **The clay albedo is not a straight downscale.** A material's colour multiplies its
+    albedo map, so a tint can only ever *darken* it, and clay_floor's albedo is a mid
+    brown — no tint over it makes a white piece. `clay_floor_001_diff_pale.jpg` is
+    therefore the source albedo's luminance remapped onto a narrow band just below white.
+    The streaks and cracks survive as gentle shading; the relief still comes from the
+    untouched normal and roughness maps. The oak albedo needs no such treatment, since
+    darkening is exactly what its tint does.
+*   **The two surfaces tile differently** (`CLAY_TEXTURE_REPEAT` / `OAK_TEXTURE_REPEAT` in
+    `main.js`). Clay is mottling and reads at any scale, but the oak source is a whole
+    plank: stretched once over a bead it puts about half a grain line on it, so it is
+    tiled several times over before the wood looks like wood.
+
+The oak map is an "ARM" pack — ambient occlusion, roughness and metalness in R, G and B,
+which is the channel each of those three material slots reads, so one image fills them
+all. Only AO and roughness are wired up; the veneer is not a metal.
+
+If the textures fail to load the pieces fall back to flat colours, exactly as they looked
+before they existed.
 
 ---
 
@@ -327,8 +381,12 @@ list; the app itself only needs flask, torch and numpy.
 │   │   ├── gameLogic.js    # client-side rules mirror
 │   │   ├── main.js         # scene, input, game flow, puzzle mode, settings
 │   │   └── sync.js         # room protocol, client half
-│   └── models/Piece.fbx    # piece mesh
+│   ├── models/Piece.fbx    # piece mesh
+│   └── textures/           # 512px piece maps, built from textures/
 ├── templates/index.html
+├── textures/               # 4k texture sources (clay_floor_001, oak_veneer_01)
+├── tools/
+│   └── build_textures.py   # textures/ -> static/textures/ (needs Pillow)
 ├── ai_agent.py             # ResNet3D, MCTS, Node
 ├── app.py                  # Flask server and API
 ├── game_logic.py           # backend ConnectFour3D rules

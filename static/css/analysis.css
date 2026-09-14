@@ -53,6 +53,11 @@
 .analysis-score.dark { background: #9c5a2a; color: #fff0e0; }
 .analysis-pv-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 600 12px/1.4 ui-monospace, monospace; }
 .analysis-pv { padding: 6px 0 2px; color: #cdc4b9; font: 12px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; }
+/* Move numbers are scaffolding, so they recede; the columns themselves carry the piece
+   colour of the side to play (light orange first, darker orange second). */
+.analysis-pv-num { color: #8b8379; font-weight: 400; }
+.analysis-pv-move { color: #efb87c; }
+.analysis-pv-move.p2 { color: #c07f47; }
 .analysis-play { margin-top: 4px; font-size: 11px; padding: 3px 8px; }
 /* Appended siblings carry no whitespace text node between them. */
 .analysis-play + .analysis-play { margin-left: 6px; }

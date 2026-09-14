@@ -2,7 +2,9 @@
 
 Every recorded solver decision must be the sole winning move, or the sole draw
 when all alternatives lose. Lines end on a solver turn and may stop before mate.
-Categories measure actual playable decisions: steps = (len(solution) + 1) // 2.
+Categories measure the OBJECTIVE mate length in solver moves (see mate_length),
+not the recorded line: a mate in 9 asks for one category however early its
+stored line stops. steps = (len(solution) + 1) // 2 remains the line length.
 
 Legacy two-line history/solution files and three-line board/history/solution
 files remain readable. Their old mate label is retained as metadata only.
@@ -27,23 +29,43 @@ import subprocess
 
 _HEX_TOKEN = re.compile(r'^[0-9a-fA-F]+$')
 
-# Difficulty groups count actual moves to find, for both legacy and V3 puzzles.
+# Difficulty groups count the solver moves in the objective mate, for both
+# legacy and V3 puzzles. The bounds are unchanged; what they measure is not.
 CATEGORIES = [
-    {'key': 'quick',   'label': 'Quick puzzle',  'range_label': '1–3 moves to find',  'min': 1,  'max': 3},
-    {'key': 'medium',  'label': 'Medium puzzle', 'range_label': '4–5 moves to find',  'min': 4,  'max': 5},
-    {'key': 'long',    'label': 'Long puzzle',   'range_label': '6–11 moves to find', 'min': 6,  'max': 11},
-    {'key': 'endgame', 'label': 'Endgame',       'range_label': '12+ moves to find',  'min': 12, 'max': None},
+    {'key': 'quick',   'label': 'Quick puzzle',  'range_label': '1–3 moves to mate',  'min': 1,  'max': 3},
+    {'key': 'medium',  'label': 'Medium puzzle', 'range_label': '4–5 moves to mate',  'min': 4,  'max': 5},
+    {'key': 'long',    'label': 'Long puzzle',   'range_label': '6–11 moves to mate', 'min': 6,  'max': 11},
+    {'key': 'endgame', 'label': 'Endgame',       'range_label': '12+ moves to mate',  'min': 12, 'max': None},
 ]
 
 CATEGORY_BY_KEY = {c['key']: c for c in CATEGORIES}
 
 
 def category_for_mate(mate):
-    """Compatibility name: classify a playable step count (not mate distance)."""
+    """Classify a mate length in solver moves (see mate_length)."""
     for c in CATEGORIES:
         if mate >= c['min'] and (c['max'] is None or mate <= c['max']):
             return c['key']
     return None
+
+
+def mate_length(puzzle):
+    """The puzzle's difficulty key: how many solver moves the objective mate
+    takes, which is what the categories group by.
+
+    V3 records carry `distance`, the plies the game still lasts under perfect
+    play, and the solver plays the odd ones, so a win of d plies is a mate in
+    (d + 1) // 2. Legacy text banks label that same number in the file name and
+    keep it in `mate`. Anything else -- a draw, which has no mate, or a V3
+    record whose distance the engine never proved -- falls back to the recorded
+    line length, the only length such a puzzle has.
+    """
+    distance = puzzle.get('distance')
+    if puzzle.get('goal') == 'win' and type(distance) is int and distance > 0:
+        return (distance + 1) // 2
+    if type(puzzle.get('mate')) is int and puzzle['mate'] > 0:
+        return puzzle['mate']
+    return puzzle['steps']
 
 
 def _is_board_code_line(line):
@@ -179,8 +201,15 @@ def parse_generated_file(path):
                     if not isinstance(board, str) or not re.fullmatch(
                             r'[0-9a-f]{1,16} [0-9a-f]{1,16}', board):
                         board = None
+                    # Objective plies-to-end under perfect play, unrelated to steps.
+                    # Optional: older records have none, and a batch can fail to
+                    # prove one, so an absent or malformed value is carried as None
+                    # rather than rejecting an otherwise valid record.
+                    distance = data.get('distance')
+                    if type(distance) is not int or distance < 0:
+                        distance = None
                     puzzle.update(version=3, position=position, board=board,
-                                  goal=data['goal'], mate=None)
+                                  goal=data['goal'], mate=None, distance=distance)
                     puzzles.append(puzzle)
                 except (ValueError, TypeError):
                     continue
@@ -190,12 +219,12 @@ def parse_generated_file(path):
 
 
 class PuzzleBank:
-    """Thread-safe bank, bucketed by playable length; by_mate is a legacy name."""
+    """Thread-safe bank, bucketed by objective mate length (see mate_length)."""
 
     def __init__(self, directory):
         self.directory = directory
         self._lock = threading.Lock()
-        self.by_mate = {}      # k -> list[puzzle dict]
+        self.by_mate = {}      # mate length -> list[puzzle dict]
         self.reload()
 
     def reload(self):
@@ -210,7 +239,7 @@ class PuzzleBank:
                 if key in seen:
                     continue
                 seen.add(key)
-                by_mate.setdefault(p['steps'], []).append(p)
+                by_mate.setdefault(mate_length(p), []).append(p)
         with self._lock:
             self.by_mate = by_mate
 
@@ -312,7 +341,7 @@ class GenerationManager:
     PIECE_RANGES = [(26, 28)]
 
     def __init__(self, bank, exe_path, output_dir, seeds=400, batch_seconds: float = 120,
-                 candidate_seconds: float = 20, min_steps=2, distance_seconds: float = 2):
+                 candidate_seconds: float = 20, min_steps=2, distance_seconds: float = 30):
         self.bank = bank
         self.exe_path = exe_path
         self.output_dir = output_dir
@@ -426,13 +455,16 @@ class GenerationManager:
             os.makedirs(self.output_dir, exist_ok=True)
             proc = subprocess.Popen(
                 # The engine's arguments are positional, so reaching the distance
-                # allowance means restating the two defaults before it: seed 0
-                # still means "choose one at random", and min playable length has
-                # always defaulted to min_steps.
+                # allowance means restating the two defaults before it. Draw the
+                # RNG seed HERE rather than passing a sentinel the engine has to
+                # interpret: an engine that reads the sentinel literally would
+                # sample the identical candidate set every batch, and after the
+                # first batch every one of them is already a suppressed duplicate.
                 [self.exe_path, 'genpuzzle', str(self.min_steps), str(self.seeds),
                  os.path.abspath(self.output_dir), str(self.batch_seconds),
                  str(min_pieces), str(max_pieces), str(self.candidate_seconds),
-                 '0', str(self.min_steps), str(self.distance_seconds)],
+                 str(random.randrange(1, 2 ** 32)), str(self.min_steps),
+                 str(self.distance_seconds)],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
                 creationflags=getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0),
             )

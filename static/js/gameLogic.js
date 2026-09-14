@@ -147,6 +147,20 @@ export class ConnectFour3D {
         return found;
     }
 
+    // The four-in-a-row running through two distinct cells, as [[z, y, x] x4] in order
+    // along the line, or null if no winning line contains both. Two distinct points fix a
+    // straight line, so there is never more than one answer.
+    findLineThrough(a, b) {
+        if (!a || !b) return null;
+        const holds = (cells, c) =>
+            cells.some(([z, y, x]) => z === c[0] && y === c[1] && x === c[2]);
+        if (holds([a], b)) return null;   // the same cell twice names no line
+        for (const cells of this._winningLines) {
+            if (holds(cells, a) && holds(cells, b)) return cells;
+        }
+        return null;
+    }
+
     _generateWinningPatterns() {
         // Keyed by bitmask so the same four cells reached from opposite directions collapse
         // to one entry, exactly as the old Set did.

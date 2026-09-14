@@ -51,18 +51,37 @@ class PuzzleBankTests(unittest.TestCase):
         self.write(records)
         self.assertEqual(parse_generated_file(self.path), [])
 
-    def test_legacy_category_uses_playable_length(self):
+    def test_legacy_category_uses_objective_mate_length(self):
+        """The file name labels the objective mate, so a one-move legacy line is
+        still a mate in 8, not a quick puzzle."""
         with open(os.path.join(self.temp.name, 'mate_in_8.txt'), 'w') as stream:
             stream.write('0 1 2 3\n4\n\n')
         self.write([self.record])
         bank = PuzzleBank(self.temp.name)
         self.assertEqual(bank.total(), 2)
-        self.assertEqual(bank.category_counts()['quick'], 2)
-        self.assertEqual(bank.get_random(1)['mate'], 8)
+        self.assertEqual(bank.category_counts()['long'], 1)   # mate in 8
+        self.assertEqual(bank.category_counts()['quick'], 1)  # the drawn record
+        self.assertEqual(bank.get_random(8)['mate'], 8)
         bank.rewrite_files()
         bank.reload()
         self.assertEqual(bank.total(), 2)  # V3 metadata must not become legacy mate data
         self.assertEqual(bank.get_random(2)['goal'], 'draw')
+
+    def test_category_follows_the_proved_distance_not_the_line_length(self):
+        """A short recorded line inside a long mate belongs to the long category:
+        distance is plies, the solver plays the odd ones, so 17 plies is a mate
+        in 9. Without a proved distance there is nothing to group by but steps."""
+        self.write([
+            dict(self.record, position='11:22', goal='win', distance=17),  # mate in 9
+            dict(self.record, position='33:44', goal='win', distance=3),   # mate in 2
+            dict(self.record, position='55:66', goal='win'),               # unproved
+            dict(self.record, position='77:88'),                           # draw
+        ])
+        bank = PuzzleBank(self.temp.name)
+        self.assertEqual(bank.counts(), {2: 3, 9: 1})  # steps is 2 for all four
+        self.assertEqual(bank.category_counts()['long'], 1)
+        self.assertEqual(bank.category_counts()['quick'], 3)
+        self.assertEqual(bank.get_random(9)['distance'], 17)
 
     def test_stop_start_and_repeated_start_do_not_deadlock(self):
         bank = PuzzleBank(self.temp.name)
@@ -156,9 +175,17 @@ class PuzzleBankTests(unittest.TestCase):
 
         with patch('puzzle_bank.os.path.exists', return_value=True), \
              patch('puzzle_bank.subprocess.Popen', side_effect=spawn):
-            manager._run_batch(26, 28)
+            for _ in range(3):
+                manager._run_batch(26, 28)
         self.assertEqual(captured[0][1], 'genpuzzle')
-        self.assertEqual(captured[0][-3:], ['0', '3', '7'])  # random seed, min playable, distance
+        self.assertEqual(captured[0][-2:], ['3', '7'])  # min playable, distance allowance
+        # Every batch must sample a DIFFERENT candidate set. A fixed or sentinel
+        # seed makes each later batch re-derive positions the bank already holds,
+        # which suppresses all of them and yields nothing however long it runs.
+        seeds = [args[-3] for args in captured]
+        self.assertEqual(len(set(seeds)), 3, 'batches reused an RNG seed')
+        for seed in seeds:
+            self.assertTrue(0 < int(seed) < 2 ** 32, f'seed {seed} is not a usable RNG seed')
         # Zero disables the step rather than passing a zero-length deadline on.
         manager.distance_seconds = 0
         captured.clear()

@@ -20,14 +20,24 @@ let pieces = []; // To hold the visible game pieces
 let ghostPieces = []; // To hold the ghost pieces for planning
 let previewPiece = null; // To hold the semi-transparent preview piece
 let isRequestInProgress = false; // Prevents multiple clicks while waiting for the server
-// Player colours run light-orange (a milky coffee) vs dark-orange (a roasted bean).
-// Ghost and outline/mask variants are lightened so they stay legible against both the
-// dark background and the piece they sit on.
-let player1Color = 0xefb87c; // Light orange
-let player2Color = 0x9c5a2a; // Dark orange
-let player1GhostColor = 0xf7d9b4; // Light orange (ghost)
-let player2GhostColor = 0xc0824c; // Dark orange (ghost)
-let player1OutlineColor = 0xffe6c2; // Light orange (occlusion outline / mask)
+// Player colours run near-white glazed clay vs dark-orange oak (a roasted bean). These
+// are tints over the piece textures (see PIECE TEXTURES below), not flat colours: the
+// shader multiplies the two, so a tint can only ever darken its map. That is why the light
+// side's tint is barely off white -- the whiteness has to come from the map itself.
+// Ghost and outline/mask variants are untextured, and chosen to stay legible against both
+// the dark background and the piece they sit on.
+let player1Color = 0xfff8ef; // Warm white
+let player2Color = 0xb4794a; // Dark orange — browner and lighter than the old flat colour,
+                             // because the oak underneath it has to stay legible as wood
+// A ghost is the same solid, full-size bead as a real piece; colour alone tells them
+// apart. The two orange ghosts read as annotations because the pieces themselves are no
+// longer orange at all -- they are white clay and brown oak. The ghost colours are flat
+// and untextured, so unlike the piece colours above they are read straight rather than as
+// tints over a map.
+let player1GhostColor = 0xffc98a; // Very light orange (ghost)
+let player2GhostColor = 0xb0480a; // Dark orange (ghost) — pushed to a vivid burnt orange
+                                  // rather than a brown, so it does not read as more oak
+let player1OutlineColor = 0xfff6e8; // Warm white (occlusion outline / mask)
 let player2OutlineColor = 0xd99760; // Dark orange (occlusion outline / mask)
 const PLAYER1_NAME = 'Light orange';
 const PLAYER2_NAME = 'Dark orange';
@@ -52,6 +62,24 @@ let occlusionFade = new Map();
 // Bars drawn through each completed four-in-a-row, so the winning line is obvious.
 let winHighlights = [];
 
+// --- GHOST LINES ---
+// Right-press one piece and release on another and, if a four-in-a-row runs through both,
+// the whole run lights up end to end -- including the cells nobody has played yet, which
+// is the point: it is how you show someone the threat you are talking about. Ghost lines
+// are planning marks exactly like the ghost pieces, so they are shared with the room and
+// cleared by all the same gestures.
+let ghostLineCells = [];    // [{ a: [z,y,x], b: [z,y,x] }] -- the two ENDS of each full line
+let ghostLineMeshes = [];
+let lineDrag = null;        // right-drag in progress: { cell, x, y } of the press
+let lineDragPreview = null; // { key, mesh } for the line the release would create
+const GHOST_LINE_COLOR = 0xb98cff;        // violet: neither player's colour, and not the
+                                          // win bar's cyan, so the three never blur together
+const GHOST_LINE_RADIUS = 0.05;           // thinner than a win bar: this is an annotation
+const GHOST_LINE_OPACITY = 0.4;
+const GHOST_LINE_PREVIEW_OPACITY = 0.18;  // while the button is still down
+const LINE_DRAG_SLOP_PX = 6;              // press-to-release travel still read as a click,
+                                          // not as the start of a line
+
 // DOM Elements (will be assigned in init)
 let STATUS_MSG, NEW_GAME_BTN, AI_MOVE_BTN, MINIMAX_MOVE_BTN, LOG_BOX, MOVE_HISTORY_BOX, MOVE_INPUT, COPY_HEX_BTN, COPY_MOVES_BTN, UNDO_BTN, PIECE_COUNT_VALUE;
 let SETTINGS_BTN, SETTINGS_MODAL_OVERLAY, CLOSE_SETTINGS_BTN;
@@ -65,8 +93,8 @@ let gameSettings = {
     autoAIMove: false,
     autoMinimaxMove: false,
     dropAnimation: true,
-    outlineThickness: 0.05,  // occlusion outline width, as a fraction of the piece radius (0 = off)
-    maskOpacity: 0.38        // occlusion mask strength (0 = off)
+    outlineThickness: 0,     // occlusion outline width, as a fraction of the piece radius (0 = off)
+    maskOpacity: 0           // occlusion mask strength (0 = off)
 };
 
 // --- DROP ANIMATION ---
@@ -104,7 +132,7 @@ let bestMoveLastFrame = 0;   // performance.now() at the previous update
 // setting working unchanged. Until the FBX loads (and if it fails) this stays a
 // unit sphere, which reproduces the previous look exactly.
 const PIECE_MODEL_URL = '/static/models/Piece.fbx';
-let pieceBaseGeo = new THREE.SphereGeometry(1, 32, 32);
+let pieceBaseGeo = ensureUv1(new THREE.SphereGeometry(1, 32, 32));
 let pieceModelLoaded = false;
 // The largest half-extent of the normalised geometry, i.e. how far the model actually
 // reaches from its centre. The bounding SPHERE radius is 1 by construction, but the bead
@@ -112,6 +140,93 @@ let pieceModelLoaded = false;
 // float outside its silhouette. This is the radius the outline ring and the occlusion
 // coverage test use. 1.0 is exact for the fallback sphere.
 let pieceSilhouetteRadius = 1.0;
+
+// --- PIECE TEXTURES ---
+// The light pieces are glazed clay, the dark ones oak veneer. Every map here is a 512px
+// JPEG built from the 4k sources in ../textures by tools/build_textures.py -- the sources
+// total ~40 MB, which is absurd for beads a few dozen pixels across, and the whole set
+// comes to ~250 KB at 512.
+//
+// The clay albedo is the one map that is not a straight downscale: it is remapped to a
+// pale ceramic tone, because a material's colour multiplies its albedo map and so can only
+// darken it. The clay's streaks and cracks survive as gentle shading, and the relief still
+// comes from the untouched normal and roughness maps. See tools/build_textures.py.
+const TEXTURE_DIR = '/static/textures/';
+// Tiles of a map across the model's UV square. The two surfaces want different scales:
+// clay is mottling, which reads at any size, but the oak source is a whole plank, and one
+// plank stretched over a bead puts about half a grain line on it -- the wood only looks
+// like wood once several run across the piece.
+const CLAY_TEXTURE_REPEAT = 1;
+const OAK_TEXTURE_REPEAT = 4;
+let pieceTextures = null;         // { light: {...map slots}, dark: {...} }, once loaded
+
+async function loadPieceTextures() {
+    const loader = new THREE.TextureLoader();
+    const load = async (file, colorSpace, repeat) => {
+        const texture = await loader.loadAsync(TEXTURE_DIR + file);
+        // Albedo is authored in sRGB; the data maps (normal, roughness, ARM) are raw
+        // numbers and must not be colour-converted.
+        texture.colorSpace = colorSpace;
+        texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+        texture.repeat.set(repeat, repeat);
+        return texture;
+    };
+
+    const [clayAlbedo, clayNormal, clayRough, oakAlbedo, oakArm] = await Promise.all([
+        load('clay_floor_001_diff_pale.jpg', THREE.SRGBColorSpace, CLAY_TEXTURE_REPEAT),
+        load('clay_floor_001_nor_gl.jpg', THREE.NoColorSpace, CLAY_TEXTURE_REPEAT),
+        load('clay_floor_001_rough.jpg', THREE.NoColorSpace, CLAY_TEXTURE_REPEAT),
+        load('oak_veneer_01_diff.jpg', THREE.SRGBColorSpace, OAK_TEXTURE_REPEAT),
+        load('oak_veneer_01_arm.jpg', THREE.NoColorSpace, OAK_TEXTURE_REPEAT),
+    ]);
+
+    pieceTextures = {
+        light: { map: clayAlbedo, normalMap: clayNormal, roughnessMap: clayRough },
+        // "ARM" packs ambient occlusion, roughness and metalness into R, G and B -- which
+        // is exactly the channel each of these three slots reads, so one image fills all
+        // three. Only ao and roughness are wired up: the veneer is not a metal, and
+        // leaving metalness at 0 keeps the bead from picking up a sheen it should not have.
+        dark: { map: oakAlbedo, aoMap: oakArm, roughnessMap: oakArm },
+    };
+}
+
+// Sharpen the maps at grazing angles. Split out because it needs the renderer's
+// capabilities, and the textures are fetched in parallel with the model -- before init()
+// has built one.
+function applyTextureAnisotropy() {
+    if (!pieceTextures || !renderer) return;
+    const max = renderer.capabilities.getMaxAnisotropy();
+    for (const set of Object.values(pieceTextures)) {
+        for (const texture of Object.values(set)) {
+            texture.anisotropy = max;
+            texture.needsUpdate = true;
+        }
+    }
+}
+
+// The map slots and surface constants for one player's pieces, ready to spread into a
+// MeshStandardMaterial. Falls back to the old flat look while the textures are in flight
+// (and for good if they fail to load).
+function pieceSurface(player) {
+    const maps = pieceTextures && (player === 1 ? pieceTextures.light : pieceTextures.dark);
+    return {
+        color: player === 1 ? player1Color : player2Color,
+        // three.js MULTIPLIES material.roughness by roughnessMap.g, so the scalar has to
+        // be 1 for the map to speak for itself.
+        roughness: maps ? 1.0 : 0.5,
+        metalness: 0,
+        ...(maps || {}),
+    };
+}
+
+// aoMap reads the second UV set (`uv1`); the model carries only one. Point the second at
+// the first, which is what an unwrapped single-UV model wants anyway.
+function ensureUv1(geometry) {
+    if (geometry.attributes.uv && !geometry.attributes.uv1) {
+        geometry.setAttribute('uv1', geometry.attributes.uv);
+    }
+    return geometry;
+}
 
 let moveHistory = [];
 let currentMoveIndex = 0;
@@ -134,10 +249,10 @@ let puzzleSource = null;          // 'file' | 'engine'
 let selectedCategory = 'quick';  // chosen difficulty category for engine puzzles
 // Category definitions (mirrors puzzle_bank.CATEGORIES); refreshed from the server.
 let CATEGORIES = [
-    { key: 'quick',   label: 'Quick puzzle',  range_label: '1–3 moves to find',  min: 1,  max: 3 },
-    { key: 'medium',  label: 'Medium puzzle', range_label: '4–5 moves to find',  min: 4,  max: 5 },
-    { key: 'long',    label: 'Long puzzle',   range_label: '6–11 moves to find', min: 6,  max: 11 },
-    { key: 'endgame', label: 'Endgame',       range_label: '12+ moves to find',  min: 12, max: null },
+    { key: 'quick',   label: 'Quick puzzle',  range_label: '1–3 moves to mate',  min: 1,  max: 3 },
+    { key: 'medium',  label: 'Medium puzzle', range_label: '4–5 moves to mate',  min: 4,  max: 5 },
+    { key: 'long',    label: 'Long puzzle',   range_label: '6–11 moves to mate', min: 6,  max: 11 },
+    { key: 'endgame', label: 'Endgame',       range_label: '12+ moves to mate',  min: 12, max: null },
 ];
 const categoryLabel = (key) => (CATEGORIES.find(c => c.key === key) || {}).label || key;
 let currentPuzzleSolved = false;
@@ -194,7 +309,7 @@ async function loadPieceModel(url) {
         Math.abs(bb.min.z), Math.abs(bb.max.z));
 
     pieceBaseGeo.dispose();
-    pieceBaseGeo = geo;
+    pieceBaseGeo = ensureUv1(geo);
     pieceModelLoaded = true;
 }
 
@@ -289,6 +404,7 @@ function init() {
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
     container.appendChild(renderer.domElement);
+    applyTextureAnisotropy();
 
     // Controls
     controls = new OrbitControls(camera, renderer.domElement);
@@ -305,15 +421,11 @@ function init() {
     // Ghost Piece Materials
     ghostPlayer1Material = new THREE.MeshStandardMaterial({
         color: player1GhostColor,
-        roughness: 0.5,
-        opacity: 0.9,
-        transparent: true
+        roughness: 0.5
     });
     ghostPlayer2Material = new THREE.MeshStandardMaterial({
         color: player2GhostColor,
-        roughness: 0.5,
-        opacity: 0.9,
-        transparent: true
+        roughness: 0.5
     });
 
     // Draw Board Structure
@@ -326,9 +438,17 @@ function init() {
     window.addEventListener('resize', onWindowResize);
     renderer.domElement.addEventListener('mousedown', onColumnClick);
     renderer.domElement.addEventListener('mousemove', onMouseMove);
-    // Right-click is used for planning ghosts (place on a column, clear on empty space),
-    // so suppress the browser context menu over the board canvas.
+    // Right-click is used for planning ghosts (place on a column, clear on empty space)
+    // and for tracing ghost lines, so suppress the browser context menu over the canvas.
     renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+    // Capture phase: OrbitControls has its own pointerdown listener on this same element,
+    // and a right-press that starts a ghost line has to switch panning off before that
+    // listener sees the event. Release is watched on the window so a drag that ends off
+    // the canvas still puts the camera back.
+    renderer.domElement.addEventListener('pointerdown', onLineDragStart, true);
+    window.addEventListener('pointerup', onLineDragEnd);
+    window.addEventListener('pointercancel', cancelLineDrag);
+    window.addEventListener('blur', cancelLineDrag);
     NEW_GAME_BTN.addEventListener('click', startNewGame);
     AI_MOVE_BTN.addEventListener('click', requestAIMove); // Add listener for AI move button
     MINIMAX_MOVE_BTN.addEventListener('click', requestMinimaxMove);
@@ -682,6 +802,7 @@ function updateBoard(boardState, dropCoords = null) {
     occlusionFade = new Map();
 
     clearGhostPieces();
+    clearGhostLines();
 
     // Also remove the preview piece when the board updates
     if (previewPiece) {
@@ -721,8 +842,7 @@ function updateBoard(boardState, dropCoords = null) {
                     stencilId++;
 
                     const material = new THREE.MeshStandardMaterial({
-                        color: (pieceValue === 1) ? player1Color : player2Color,
-                        roughness: 0.5,
+                        ...pieceSurface(pieceValue),
                         opacity: gameSettings.pieceOpacity,
                         transparent: isTransparent,
                         stencilWrite: true,
@@ -733,6 +853,8 @@ function updateBoard(boardState, dropCoords = null) {
                     const piece = createPieceMesh(material);
                     const targetY = 3 - z;
                     piece.position.set(x, targetY, y);
+                    // Which cell this bead is, so a right-drag over it can name it.
+                    piece.userData.cell = [z, y, x];
                     scene.add(piece);
                     pieces.push(piece);
 
@@ -855,11 +977,7 @@ const _winAxis = new THREE.Vector3();
 const _winUp = new THREE.Vector3(0, 1, 0);
 
 function clearWinHighlight() {
-    winHighlights.forEach(m => {
-        scene.remove(m);
-        m.geometry.dispose();
-        m.material.dispose();
-    });
+    disposeMeshes(winHighlights);
     winHighlights = [];
 }
 
@@ -877,41 +995,124 @@ function updateWinHighlight(state, reach) {
     if (lines.length === 0) return;
 
     for (const { cells } of lines) {
-        // Board [z, y, x] maps to world (x, 3 - z, y), the same mapping the pieces use.
-        const from = cellToWorld(cells[0]);
-        const to = cellToWorld(cells[cells.length - 1]);
-
-        _winAxis.copy(to).sub(from);
-        const span = _winAxis.length();
-        _winAxis.normalize();
-
-        // A capsule is a cylinder with hemispherical caps, so the bar ends in a dome over
-        // the outermost bead instead of a flat disc. Its total length is body + 2 * radius,
-        // hence the radius subtracted here.
-        const body = Math.max(0.001, span + 2 * reach - 2 * WIN_LINE_RADIUS);
-        const geometry = new THREE.CapsuleGeometry(WIN_LINE_RADIUS, body, 6, 16);
-        const material = new THREE.MeshBasicMaterial({
+        const bar = makeCellSpanBar(cells[0], cells[cells.length - 1], {
             color: WIN_LINE_COLOR,
-            transparent: true,
+            radius: WIN_LINE_RADIUS,
             opacity: WIN_LINE_OPACITY,
-            // The bar runs through the centres of the beads, so with a normal depth test it
-            // would be buried inside them and only visible in the gaps. Drawing it on top
-            // instead makes it read as a highlight laid over the winning run.
-            depthTest: false,
-            depthWrite: false
+            reach,
+            // Above the poles (1000) but below the corner labels (2000).
+            renderOrder: 1500,
         });
-
-        const bar = new THREE.Mesh(geometry, material);
-        bar.position.copy(from).add(to).multiplyScalar(0.5);
-        // CapsuleGeometry is built along +Y; rotate that axis onto the line's direction.
-        bar.quaternion.setFromUnitVectors(_winUp, _winAxis);
-        // Above the poles (1000) but below the corner labels (2000).
-        bar.renderOrder = 1500;
         // Hold it back until the winning piece has finished dropping (see updateDrops).
         bar.visible = activeDrops.length === 0;
         scene.add(bar);
         winHighlights.push(bar);
     }
+}
+
+// A bar laid along the run from one cell to another, used for both the win highlights and
+// the ghost lines. `reach` is how far past the two end cells' centres it should extend --
+// the piece silhouette radius, so it spans the full run rather than stopping at the middle
+// of the outermost beads.
+function makeCellSpanBar(fromCell, toCell, { color, radius, opacity, reach, renderOrder }) {
+    // Board [z, y, x] maps to world (x, 3 - z, y), the same mapping the pieces use.
+    const from = cellToWorld(fromCell);
+    const to = cellToWorld(toCell);
+
+    _winAxis.copy(to).sub(from);
+    const span = _winAxis.length();
+    _winAxis.normalize();
+
+    // A capsule is a cylinder with hemispherical caps, so the bar ends in a dome over the
+    // outermost bead instead of a flat disc. Its total length is body + 2 * radius, hence
+    // the radius subtracted here.
+    const body = Math.max(0.001, span + 2 * reach - 2 * radius);
+    const bar = new THREE.Mesh(
+        new THREE.CapsuleGeometry(radius, body, 6, 16),
+        new THREE.MeshBasicMaterial({
+            color,
+            transparent: true,
+            opacity,
+            // The bar runs through the centres of the beads, so with a normal depth test it
+            // would be buried inside them and only visible in the gaps. Drawing it on top
+            // instead makes it read as a highlight laid over the run.
+            depthTest: false,
+            depthWrite: false
+        }));
+    bar.position.copy(from).add(to).multiplyScalar(0.5);
+    // CapsuleGeometry is built along +Y; rotate that axis onto the line's direction.
+    bar.quaternion.setFromUnitVectors(_winUp, _winAxis);
+    bar.renderOrder = renderOrder;
+    return bar;
+}
+
+// --- GHOST LINES ---
+
+// How far a bar overshoots the centre of the bead at each end.
+function pieceReach() {
+    return pieceSilhouetteRadius * 0.4 * gameSettings.pieceSize;
+}
+
+function disposeMeshes(meshes) {
+    meshes.forEach(m => {
+        scene.remove(m);
+        m.geometry.dispose();
+        m.material.dispose();
+    });
+}
+
+function clearGhostLines() {
+    disposeMeshes(ghostLineMeshes);
+    ghostLineMeshes = [];
+    ghostLineCells = [];
+}
+
+// Draw the given set of lines, replacing whatever is there. The twin of renderGhosts: the
+// argument is the shared representation, so a set from another viewer and one built here
+// go through exactly the same path.
+function renderGhostLines(lines) {
+    // Copied up front: clearGhostLines empties ghostLineCells, and a caller is allowed to
+    // hand us the very array it is asking us to redraw.
+    const wanted = lines.map(l => ({ a: l.a, b: l.b }));
+    clearGhostLines();
+    const reach = pieceReach();
+    for (const { a, b } of wanted) {
+        const bar = makeCellSpanBar(a, b, {
+            color: GHOST_LINE_COLOR,
+            radius: GHOST_LINE_RADIUS,
+            opacity: GHOST_LINE_OPACITY,
+            reach,
+            // Under the win bars (1500): a completed four-in-a-row outranks a note about one.
+            renderOrder: 1400,
+        });
+        scene.add(bar);
+        ghostLineMeshes.push(bar);
+    }
+    ghostLineCells = wanted;
+}
+
+// Trace the four-in-a-row through two cells, if there is one. Tracing a line that is
+// already up takes it down again, so a mis-drag is undone by repeating it.
+function addGhostLine(fromCell, toCell) {
+    const line = game.findLineThrough(fromCell, toCell);
+    if (!line) {
+        logMessage('Those two pieces are not on the same line.');
+        return;
+    }
+    const ends = { a: line[0], b: line[line.length - 1] };
+    const existing = ghostLineCells.findIndex(l => sameCell(l.a, ends.a) && sameCell(l.b, ends.b));
+    const next = ghostLineCells.slice();
+    if (existing >= 0) next.splice(existing, 1);
+    else next.push(ends);
+
+    renderGhostLines(next);
+    // Shared, like the planning ghosts: they are how two people point at a line together.
+    pushShared({ lines: lineCells() });
+}
+
+// The lines as the rest of the room should see them.
+function lineCells() {
+    return ghostLineCells.map(l => ({ a: l.a, b: l.b }));
 }
 
 function cellToWorld([z, y, x]) {
@@ -966,6 +1167,7 @@ function fullSharedState() {
         moves: moveHistory,
         view_index: currentMoveIndex,
         ghosts: ghostCells(),
+        lines: lineCells(),
         puzzle: isPuzzleMode ? sharedPuzzleState() : null,
         progress: isPuzzleMode ? sharedProgress() : null,
     };
@@ -1009,6 +1211,7 @@ function pushBoard({ log = null, expect = true } = {}) {
         moves: moveHistory,
         view_index: currentMoveIndex,
         ghosts: ghostCells(),
+        lines: lineCells(),
         progress: isPuzzleMode ? sharedProgress() : null,
     }, { expect, log });
 }
@@ -1062,8 +1265,9 @@ function applyRemoteState(state) {
         currentMoveIndex = viewIndex;
         boardState = game.getStateFromMoves(moves.slice(0, viewIndex)).state;
 
-        updateBoard(boardState, dropCoords);       // clears ghosts...
+        updateBoard(boardState, dropCoords);       // clears ghosts and lines...
         renderGhosts(state.ghosts || []);          // ...so redraw the shared ones
+        renderGhostLines(state.lines || []);
         updateMoveHistory(moveHistory);
         refreshControls();
     } finally {
@@ -1083,6 +1287,13 @@ function boardMatchesLocal(state, moves, viewIndex) {
     if (theirs.length !== mine.length) return false;
     if (!theirs.every((g, i) => g.x === mine[i].x && g.y === mine[i].y
                              && g.z === mine[i].z && g.player === mine[i].player)) return false;
+
+    const myLines = ghostLineCells;
+    const theirLines = state.lines || [];
+    if (theirLines.length !== myLines.length) return false;
+    if (!theirLines.every((l, i) => sameCell(l.a, myLines[i].a) && sameCell(l.b, myLines[i].b))) {
+        return false;
+    }
 
     if (isPuzzleMode) {
         const p = state.progress || {};
@@ -1137,12 +1348,22 @@ function ghostCells() {
 function renderGhosts(cells) {
     clearGhostPieces();
     cells.forEach(c => {
-        const piece = createPieceMesh(c.player === 1 ? ghostPlayer1Material : ghostPlayer2Material);
-        piece.position.set(c.x, c.y, c.z);
-        piece.userData.isGhost = true;
+        // World (x, y, z) back to board [z, y, x] -- see getTemporaryState for the mapping.
+        const piece = createGhostMesh(
+            c.player, [3 - Math.round(c.y), Math.round(c.z), Math.round(c.x)]);
         scene.add(piece);
         ghostPieces.push(piece);
     });
+}
+
+// A planning ghost for `player`, in the cell [depth, row, col]. Identical to a real bead
+// but for its colour, which comes from the two ghost materials.
+function createGhostMesh(player, [depth, row, col]) {
+    const mesh = createPieceMesh(player === 1 ? ghostPlayer1Material : ghostPlayer2Material);
+    mesh.position.set(col, 3 - depth, row);
+    mesh.userData.isGhost = true;
+    mesh.userData.cell = [depth, row, col];
+    return mesh;
 }
 
 // Put the buttons in the right state for the board as it now stands. checkGameOver does
@@ -1595,6 +1816,7 @@ async function navigateHistory(direction) {
 
     if (newIndex < 0 || newIndex > moveHistory.length) {
         clearGhostPieces();
+        clearGhostLines();
         return; // Out of bounds
     }
 
@@ -1610,7 +1832,7 @@ async function navigateHistory(direction) {
     updateMoveHistory(moveHistory); // Redraw to update highlighting
 
     // Scrubbing the history is part of what the room is looking at, so it travels too.
-    pushShared({ view_index: currentMoveIndex, ghosts: [] });
+    pushShared({ view_index: currentMoveIndex, ghosts: [], lines: [] });
 
     if (isViewingLive) {
         logMessage('Viewing the most recent move. Your turn!');
@@ -1694,6 +1916,37 @@ function onWindowResize() {
     renderer.setSize(container.clientWidth, container.clientHeight);
 }
 
+// --- POINTER PICKING ---
+
+const _pickRay = new THREE.Raycaster();
+const _pickPoint = new THREE.Vector2();
+
+function pointerNdc(event) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    _pickPoint.set(
+        ((event.clientX - rect.left) / rect.width) * 2 - 1,
+        -((event.clientY - rect.top) / rect.height) * 2 + 1);
+    return _pickPoint;
+}
+
+// The drop column under the pointer, or null. The targets are invisible planes above the
+// board, so this answers "which column would a click play in", not "what is under the ray".
+function pickColumn(event) {
+    _pickRay.setFromCamera(pointerNdc(event), camera);
+    const hits = _pickRay.intersectObjects(clickTargets);
+    return hits.length ? hits[0].object.userData.column : null;
+}
+
+// The board cell of the bead under the pointer, or null. Planning ghosts count as beads:
+// a line you are still working out is exactly the one you want to trace.
+function pickPieceCell(event) {
+    _pickRay.setFromCamera(pointerNdc(event), camera);
+    // Non-recursive: the occlusion masks are children of their piece, and picking one
+    // would hand back a mesh with no cell of its own.
+    const hits = _pickRay.intersectObjects(pieces.concat(ghostPieces), false);
+    return hits.length ? (hits[0].object.userData.cell || null) : null;
+}
+
 function onColumnClick(event) {
     if (isRequestInProgress) return;
 
@@ -1703,28 +1956,102 @@ function onColumnClick(event) {
         previewPiece = null;
     }
 
-    const mouse = new THREE.Vector2();
-    const rect = renderer.domElement.getBoundingClientRect();
-    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, camera);
-
-    const intersects = raycaster.intersectObjects(clickTargets);
-
-    if (intersects.length > 0) {
-        const clickedColumn = intersects[0].object.userData.column;
-        if (event.button === 0) { // Left click
-            handlePlayerMove(clickedColumn);
-        } else if (event.button === 2) { // Right click
-            handleGhostMove(clickedColumn);
-        }
-    } else if (event.button === 2) {
-        // Right-click on empty space (not over a drop column) clears all planning ghosts.
-        clearGhostPieces();
-        pushShared({ ghosts: [] });
+    if (event.button === 0) { // Left click
+        const column = pickColumn(event);
+        if (column !== null) handlePlayerMove(column);
+    } else if (event.button === 2 && !lineDrag) {
+        // A right-press that landed on a bead is a ghost-line drag, and is settled when
+        // the button comes back up (see onLineDragEnd) -- not here.
+        rightClickAt(event);
     }
+}
+
+// Right-click over a drop column plans a ghost there; anywhere else it wipes the planning
+// marks -- both the ghosts and the ghost lines.
+function rightClickAt(event) {
+    const column = pickColumn(event);
+    if (column !== null) {
+        handleGhostMove(column);
+    } else {
+        clearGhostPieces();
+        clearGhostLines();
+        pushShared({ ghosts: [], lines: [] });
+    }
+}
+
+// --- GHOST LINE DRAG ---
+
+// Runs in the capture phase, before OrbitControls' own pointerdown listener.
+function onLineDragStart(event) {
+    if (event.button !== 2 || isRequestInProgress) return;
+    const cell = pickPieceCell(event);
+    if (!cell) return;   // not on a bead: leave the right-drag to the camera, as before
+
+    lineDrag = { cell, x: event.clientX, y: event.clientY };
+    // Right-drag is OrbitControls' pan gesture, and the camera must hold still while a
+    // line is being traced. Switched back on when the button is released.
+    controls.enablePan = false;
+}
+
+// Put everything back the way onLineDragStart found it. A press that never produces a
+// release -- the pointer is cancelled, or the window loses focus mid-drag -- must not
+// leave panning switched off for the rest of the session.
+function cancelLineDrag() {
+    if (!lineDrag) return null;
+    const start = lineDrag;
+    lineDrag = null;
+    controls.enablePan = true;
+    clearLineDragPreview();
+    return start;
+}
+
+function onLineDragEnd(event) {
+    if (event.button !== 2 || !lineDrag) return;
+    const start = cancelLineDrag();
+
+    // A press that went nowhere is a click, whatever it happened to land on, and is
+    // handled as one. This is checked before the line, not after: a bead is very often
+    // somewhere along the ray to the top of a pole, so reading "the press started on a
+    // bead" as "the user is drawing a line" would quietly eat the right-click that was
+    // meant to plan a ghost there. A line is something you drag out.
+    const travelled = Math.hypot(event.clientX - start.x, event.clientY - start.y);
+    if (travelled <= LINE_DRAG_SLOP_PX) {
+        if (!isRequestInProgress) rightClickAt(event);
+        return;
+    }
+
+    const cell = pickPieceCell(event);
+    if (cell && !sameCell(cell, start.cell)) addGhostLine(start.cell, cell);
+}
+
+function clearLineDragPreview() {
+    if (!lineDragPreview) return;
+    disposeMeshes([lineDragPreview.mesh]);
+    lineDragPreview = null;
+}
+
+// While the button is down, show the line the release would draw. Rebuilt only when the
+// answer changes, so sweeping the pointer across a piece does not churn geometry.
+function updateLineDragPreview(event) {
+    const cell = pickPieceCell(event);
+    const line = (cell && !sameCell(cell, lineDrag.cell))
+        ? game.findLineThrough(lineDrag.cell, cell)
+        : null;
+    const key = line ? `${line[0]}-${line[line.length - 1]}` : null;
+    if (lineDragPreview && lineDragPreview.key === key) return;
+
+    clearLineDragPreview();
+    if (!line) return;
+
+    const mesh = makeCellSpanBar(line[0], line[line.length - 1], {
+        color: GHOST_LINE_COLOR,
+        radius: GHOST_LINE_RADIUS,
+        opacity: GHOST_LINE_PREVIEW_OPACITY,
+        reach: pieceReach(),
+        renderOrder: 1400,
+    });
+    scene.add(mesh);
+    lineDragPreview = { key, mesh };
 }
 
 function handleGhostMove(column) {
@@ -1736,14 +2063,7 @@ function handleGhostMove(column) {
         return;
     }
 
-    const player = game.getCurrentPlayer(tempState);
-    const [depth, row, col] = landingPosition;
-
-    const material = player === 1 ? ghostPlayer1Material : ghostPlayer2Material;
-
-    const piece = createPieceMesh(material);
-    piece.position.set(col, 3 - depth, row);
-    piece.userData.isGhost = true;
+    const piece = createGhostMesh(game.getCurrentPlayer(tempState), landingPosition);
     scene.add(piece);
     ghostPieces.push(piece);
 
@@ -1775,24 +2095,23 @@ function getTemporaryState() {
 function onMouseMove(event) {
     if (isRequestInProgress) return;
 
-    const mouse = new THREE.Vector2();
-    const rect = renderer.domElement.getBoundingClientRect();
-    mouse.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-
-    const raycaster = new THREE.Raycaster();
-    raycaster.setFromCamera(mouse, camera);
-
-    const intersects = raycaster.intersectObjects(clickTargets);
-
-    if (intersects.length > 0) {
-        const hoveredColumn = intersects[0].object.userData.column;
-        showPreview(hoveredColumn);
-    } else {
+    // Mid-drag the pointer is naming the far end of a line, not a column to drop into, so
+    // the drop preview gets out of the way.
+    if (lineDrag) {
         if (previewPiece) {
             scene.remove(previewPiece);
             previewPiece = null;
         }
+        updateLineDragPreview(event);
+        return;
+    }
+
+    const hoveredColumn = pickColumn(event);
+    if (hoveredColumn !== null) {
+        showPreview(hoveredColumn);
+    } else if (previewPiece) {
+        scene.remove(previewPiece);
+        previewPiece = null;
     }
 }
 
@@ -1815,9 +2134,11 @@ async function showPreview(column) {
         scene.remove(previewPiece);
     }
 
-    const material = player === 1
-        ? new THREE.MeshStandardMaterial({ color: player1Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true })
-        : new THREE.MeshStandardMaterial({ color: player2Color, roughness: 0.5, opacity: Math.min(gameSettings.pieceOpacity, 0.5), transparent: true });
+    const material = new THREE.MeshStandardMaterial({
+        ...pieceSurface(player),
+        opacity: Math.min(gameSettings.pieceOpacity, 0.5),
+        transparent: true,
+    });
 
     previewPiece = createPieceMesh(material);
     previewPiece.position.set(col, 3 - depth, row);
@@ -2485,8 +2806,13 @@ async function showSolution() {
 }
 
 // --- START ---
-// The piece model must be in place before the first updateBoard, so init() waits on it.
-// A failure is non-fatal: pieceBaseGeo stays a unit sphere and the game runs as before.
-loadPieceModel(PIECE_MODEL_URL)
-    .catch((err) => console.warn(`Could not load ${PIECE_MODEL_URL}; falling back to spheres.`, err))
-    .finally(() => init());
+// The piece model and its textures must be in place before the first updateBoard, so
+// init() waits on both, fetched together. Either failing is non-fatal: pieceBaseGeo stays
+// a unit sphere, pieceTextures stays null, and the game runs with flat-coloured beads as
+// it did before.
+Promise.all([
+    loadPieceModel(PIECE_MODEL_URL).catch((err) =>
+        console.warn(`Could not load ${PIECE_MODEL_URL}; falling back to spheres.`, err)),
+    loadPieceTextures().catch((err) =>
+        console.warn('Could not load the piece textures; falling back to flat colours.', err)),
+]).finally(() => init());

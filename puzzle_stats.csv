@@ -1,0 +1,142 @@
+section,bucket,count,percent_of_puzzles
+overview,puzzles,9145,
+overview,records accepted by the loader,9145,
+overview,json lines in file,9145,
+overview,non-empty lines in file,9145,
+overview,records the loader rejected,0,
+overview,records that could not be replayed,0,
+overview,records whose board field disagrees with the replay,0,
+overview,distinct canonical positions,9145,
+overview,puzzles with a proved distance,9144,
+goal,draw,17,0.19
+goal,win,9128,99.81
+mate_category,mate in 2,5422,59.29
+mate_category,mate in 3,1289,14.10
+mate_category,mate in 4,670,7.33
+mate_category,mate in 5,442,4.83
+mate_category,mate in 6,130,1.42
+mate_category,mate in 7,118,1.29
+mate_category,mate in 8,129,1.41
+mate_category,mate in 9,114,1.25
+mate_category,mate in 10,80,0.87
+mate_category,mate in 11,35,0.38
+mate_category,mate in 12,38,0.42
+mate_category,mate in 13,37,0.40
+mate_category,mate in 14,57,0.62
+mate_category,mate in 15,119,1.30
+mate_category,mate in 16,180,1.97
+mate_category,mate in 17,156,1.71
+mate_category,mate in 18,94,1.03
+mate_category,mate in 19,17,0.19
+mate_category,draw,17,0.19
+mate_category,unknown,1,0.01
+moves,3,5424,59.31
+moves,5,1691,18.49
+moves,7,541,5.92
+moves,9,307,3.36
+moves,11,196,2.14
+moves,13,310,3.39
+moves,15,266,2.91
+moves,17,180,1.97
+moves,19,101,1.10
+moves,21,57,0.62
+moves,23,44,0.48
+moves,25,12,0.13
+moves,27,7,0.08
+moves,29,2,0.02
+moves,31,4,0.04
+moves,33,3,0.03
+steps,2,5424,59.31
+steps,3,1691,18.49
+steps,4,541,5.92
+steps,5,307,3.36
+steps,6,196,2.14
+steps,7,310,3.39
+steps,8,266,2.91
+steps,9,180,1.97
+steps,10,101,1.10
+steps,11,57,0.62
+steps,12,44,0.48
+steps,13,12,0.13
+steps,14,7,0.08
+steps,15,2,0.02
+steps,16,4,0.04
+steps,17,3,0.03
+forcing_moves,0,1745,19.08
+forcing_moves,1,5453,59.63
+forcing_moves,2,1309,14.31
+forcing_moves,3,472,5.16
+forcing_moves,4,115,1.26
+forcing_moves,5,40,0.44
+forcing_moves,6,9,0.10
+forcing_moves,7,2,0.02
+nonforcing_moves,1,5164,56.47
+nonforcing_moves,2,2495,27.28
+nonforcing_moves,3,173,1.89
+nonforcing_moves,4,211,2.31
+nonforcing_moves,5,263,2.88
+nonforcing_moves,6,266,2.91
+nonforcing_moves,7,256,2.80
+nonforcing_moves,8,156,1.71
+nonforcing_moves,9,87,0.95
+nonforcing_moves,10,39,0.43
+nonforcing_moves,11,18,0.20
+nonforcing_moves,12,7,0.08
+nonforcing_moves,13,3,0.03
+nonforcing_moves,14,4,0.04
+nonforcing_moves,15,3,0.03
+solver_blocks,0,6342,69.35
+solver_blocks,1,1366,14.94
+solver_blocks,2,284,3.11
+solver_blocks,3,303,3.31
+solver_blocks,4,299,3.27
+solver_blocks,5,280,3.06
+solver_blocks,6,156,1.71
+solver_blocks,7,66,0.72
+solver_blocks,8,37,0.40
+solver_blocks,9,10,0.11
+solver_blocks,10,2,0.02
+decisive_steps,1,824,9.01
+decisive_steps,2,5562,60.82
+decisive_steps,3,1710,18.70
+decisive_steps,4,613,6.70
+decisive_steps,5,256,2.80
+decisive_steps,6,102,1.12
+decisive_steps,7,43,0.47
+decisive_steps,8,20,0.22
+decisive_steps,9,6,0.07
+decisive_steps,10,4,0.04
+decisive_steps,11,2,0.02
+decisive_steps,12,3,0.03
+distance,3,5422,59.29
+distance,5,1289,14.10
+distance,7,670,7.33
+distance,9,442,4.83
+distance,11,130,1.42
+distance,13,118,1.29
+distance,15,129,1.41
+distance,17,114,1.25
+distance,19,80,0.87
+distance,21,35,0.38
+distance,23,38,0.42
+distance,25,37,0.40
+distance,27,57,0.62
+distance,29,119,1.30
+distance,31,180,1.97
+distance,33,156,1.71
+distance,35,94,1.03
+distance,36,9,0.10
+distance,37,23,0.25
+distance,38,2,0.02
+distance,unknown,1,0.01
+root_pieces,26,2160,23.62
+root_pieces,27,3081,33.69
+root_pieces,28,3904,42.69
+solver_move_totals,forcing,10215,
+solver_move_totals,winning,8630,
+solver_move_totals,threat_ignored,2819,
+solver_move_totals,threat_at_line_end,285,
+solver_move_totals,quiet,7329,
+solver_move_totals,blocks,7243,
+solver_move_totals,solver moves total,29278,
+solver_move_totals,non-forcing total,19063,

@@ -1,0 +1,178 @@
+Puzzle bank statistics
+======================
+Source: C:\Users\Howard\Desktop\work\3d connect 4\connect4-web-app\puzzles\generated_v3.jsonl
+
+puzzles                                              9145
+records accepted by the loader                       9145
+json lines in file                                   9145
+non-empty lines in file                              9145
+records the loader rejected                          0
+records that could not be replayed                   0
+records whose board field disagrees with the replay  0
+distinct canonical positions                         9145
+puzzles with a proved distance                       9144
+
+Puzzles by goal
+---------------
+draw        17    0.2%
+win       9128   99.8%
+
+Puzzles by mate category (from objective distance)
+--------------------------------------------------
+mate in 2     5422   59.3%
+mate in 3     1289   14.1%
+mate in 4      670    7.3%
+mate in 5      442    4.8%
+mate in 6      130    1.4%
+mate in 7      118    1.3%
+mate in 8      129    1.4%
+mate in 9      114    1.2%
+mate in 10      80    0.9%
+mate in 11      35    0.4%
+mate in 12      38    0.4%
+mate in 13      37    0.4%
+mate in 14      57    0.6%
+mate in 15     119    1.3%
+mate in 16     180    2.0%
+mate in 17     156    1.7%
+mate in 18      94    1.0%
+mate in 19      17    0.2%
+draw            17    0.2%
+unknown          1    0.0%
+
+Puzzles by line length (moves in the recorded line)
+---------------------------------------------------
+3         5424   59.3%
+5         1691   18.5%
+7          541    5.9%
+9          307    3.4%
+11         196    2.1%
+13         310    3.4%
+15         266    2.9%
+17         180    2.0%
+19         101    1.1%
+21          57    0.6%
+23          44    0.5%
+25          12    0.1%
+27           7    0.1%
+29           2    0.0%
+31           4    0.0%
+33           3    0.0%
+
+Puzzles by solver decisions (steps)
+-----------------------------------
+2         5424   59.3%
+3         1691   18.5%
+4          541    5.9%
+5          307    3.4%
+6          196    2.1%
+7          310    3.4%
+8          266    2.9%
+9          180    2.0%
+10         101    1.1%
+11          57    0.6%
+12          44    0.5%
+13          12    0.1%
+14           7    0.1%
+15           2    0.0%
+16           4    0.0%
+17           3    0.0%
+
+Puzzles by number of forcing solver moves
+-----------------------------------------
+0         1745   19.1%
+1         5453   59.6%
+2         1309   14.3%
+3          472    5.2%
+4          115    1.3%
+5           40    0.4%
+6            9    0.1%
+7            2    0.0%
+
+Puzzles by number of non-forcing solver moves
+---------------------------------------------
+1         5164   56.5%
+2         2495   27.3%
+3          173    1.9%
+4          211    2.3%
+5          263    2.9%
+6          266    2.9%
+7          256    2.8%
+8          156    1.7%
+9           87    1.0%
+10          39    0.4%
+11          18    0.2%
+12           7    0.1%
+13           3    0.0%
+14           4    0.0%
+15           3    0.0%
+
+Puzzles by number of forced blocks played by the solver
+-------------------------------------------------------
+0         6342   69.3%
+1         1366   14.9%
+2          284    3.1%
+3          303    3.3%
+4          299    3.3%
+5          280    3.1%
+6          156    1.7%
+7           66    0.7%
+8           37    0.4%
+9           10    0.1%
+10           2    0.0%
+
+Puzzles by decisive steps (steps minus blocks)
+----------------------------------------------
+1          824    9.0%
+2         5562   60.8%
+3         1710   18.7%
+4          613    6.7%
+5          256    2.8%
+6          102    1.1%
+7           43    0.5%
+8           20    0.2%
+9            6    0.1%
+10           4    0.0%
+11           2    0.0%
+12           3    0.0%
+
+Puzzles by objective distance in plies
+--------------------------------------
+3          5422   59.3%
+5          1289   14.1%
+7           670    7.3%
+9           442    4.8%
+11          130    1.4%
+13          118    1.3%
+15          129    1.4%
+17          114    1.2%
+19           80    0.9%
+21           35    0.4%
+23           38    0.4%
+25           37    0.4%
+27           57    0.6%
+29          119    1.3%
+31          180    2.0%
+33          156    1.7%
+35           94    1.0%
+36            9    0.1%
+37           23    0.3%
+38            2    0.0%
+unknown       1    0.0%
+
+Puzzles by pieces on the board at the root
+------------------------------------------
+26        2160   23.6%
+27        3081   33.7%
+28        3904   42.7%
+
+Solver move totals across the whole bank
+----------------------------------------
+forcing              10215
+winning               8630
+threat_ignored        2819
+threat_at_line_end     285
+quiet                 7329
+blocks                7243
+solver moves total   29278
+non-forcing total    19063
