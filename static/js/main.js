@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { ConnectFour3D } from './gameLogic.js';
 import { RoomSync } from './sync.js';
 import { AnalysisPanel } from './analysis.js';
+import { bestMove } from './engine.js';
 import {
     columnRange, columnTag, formatColumn, formatColumns,
     onColumnNumberingChange, parseColumn, setColumnText, setOneIndexed,
@@ -1771,20 +1772,9 @@ async function requestMinimaxMove() {
     await setEngineBusy('minimax');
 
     try {
-        const hexCodes = game.getStateHexCode(boardState).split(' ');
-        const hex_p1 = hexCodes[0];
-        const hex_p2 = hexCodes[1];
-
-        const response = await fetch('/api/minimax_move', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ hex_p1, hex_p2 }),
-        });
-
-        if (!response.ok) throw new Error('Minimax server error.');
-
-        const data = await response.json();
-        const move = data.move;
+        // Searched in this browser (see engine.js); we are at the latest move, so
+        // the history is exactly the board on screen.
+        const { move } = await bestMove(moveHistory);
 
         const dropCoords = game.getLandingPosition(boardState, move);
         boardState = game.getNextState(boardState, move);

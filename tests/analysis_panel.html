@@ -22,7 +22,7 @@
 import { AnalysisPanel } from '../static/js/analysis.js';
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const panel = new AnalysisPanel(() => {}, () => {});
-// Isolated renderer test: no shared-room writes, HTTP jobs, neural model or GPU.
+// Isolated renderer test: no shared-room writes, engine worker, neural model or GPU.
 panel.tick = async () => {};
 panel.moves = [0];
 const snapshot = {
