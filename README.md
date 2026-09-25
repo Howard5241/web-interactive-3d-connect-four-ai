@@ -2,7 +2,9 @@
 
 Connect Four on a 4x4x4 grid, played in the browser. A Flask backend serves a three.js
 board and provides two opponents: a PyTorch ResNet + MCTS agent, and the C++ minimax
-engine from `connect4-c++/`. There is also a puzzle mode backed by an engine-generated
+engine from `connect4-c++/`. The minimax engine and analysis mode run **in the browser**,
+as a WebAssembly build of that engine, the way chess sites run their engine locally for
+self-analysis. There is also a puzzle mode backed by an engine-generated
 puzzle bank, and a shared-room mode so several browsers can look at and play the same
 board.
 
@@ -21,7 +23,8 @@ board.
         channels, ~9.0M parameters) searched with MCTS at 500 simulations per move.
         The architecture is read out of the checkpoint at startup, so swapping in a
         differently-shaped `.pth` does not need a code change.
-    *   Minimax: the prebuilt C++ engine `bin/connect4_3D.exe`, driven over stdin.
+    *   Minimax: the C++ Strong V4 engine, compiled to WebAssembly and run in a Web
+        Worker in your browser (3 seconds per move). See [Browser engine](#browser-engine).
     *   Either can be set to move automatically after yours, from the settings panel.
 *   **Move preview and planning ghosts.** Hovering a column shows where the piece will
     land. Right-clicking a column places a planning piece; right-clicking empty space
@@ -63,8 +66,9 @@ board.
 | Backend  | Python 3.11 + Flask 3.1 | Serves the page and the REST API. |
 |          | PyTorch 2.9 (CUDA if available) | Runs the `ResNet3D` checkpoint for the MCTS agent. |
 |          | NumPy | Board representation and game rules. |
-|          | `bin/connect4_3D.exe` | C++ minimax engine; also generates puzzles via its `genpuzzle` CLI. |
+|          | `bin/connect4_3D.exe` | C++ engine; generates puzzles via its `genpuzzle` CLI. |
 | Frontend | JavaScript (ES modules) | Game flow, input, API calls, room sync. |
+|          | `static/engine/` (WebAssembly) | The same C++ engine, run in a Web Worker for analysis and the minimax opponent. |
 |          | three.js 0.160 (unpkg CDN, via import map) | Rendering, camera, FBX loading. Needs network access on first load. |
 |          | HTML5 / CSS3 | Page structure and UI. |
 
@@ -76,22 +80,15 @@ board.
 
 `app.py` loads the model once at startup, loads the puzzle bank from `puzzles/`, and
 creates the room registry. It runs single-threaded (`threaded=False`) because the
-PyTorch model and the engine subprocess are shared, unsynchronised state.
+PyTorch model and the puzzle generator's engine subprocess are shared, unsynchronised
+state. The server does not run analysis or minimax searches; browsers do.
 
 Endpoints:
 
 *   `POST /api/new_game` - reset the board in the Flask session.
 *   `POST /api/ai_move` - run MCTS on the session's board and return the chosen column.
-*   `POST /api/minimax_move` - hand two hex board codes to the C++ engine and parse its
-    move out of stdout.
 *   `POST /api/set_state` - set the session's board and move history, used to sync
     before asking for an AI move.
-*   `POST /api/analysis/start` - validate `{moves: [0..15, ...], top: 1..16}` and
-    start a background V4 job; returns an opaque `job_id` (202). `top` is validated
-    and echoed but does not size the search: snapshots always carry every ranked root
-    move, and the caller decides how many to show.
-*   `GET /api/analysis/<job_id>` - latest completed iteration and heartbeat.
-*   `POST /api/analysis/<job_id>/stop` - cancel and release an analysis job.
 *   `GET /api/room/state` - poll a room for changes; doubles as the presence heartbeat.
 *   `POST /api/room/state` - push a partial state patch to a room.
 *   `POST /api/room/leave` - drop a viewer from the presence list on tab close.
@@ -112,8 +109,36 @@ immediately without a round trip and hex codes can be computed locally. `sync.js
 implements the room protocol.
 
 A local move is applied on screen first, then pushed to the room. Asking for an engine
-move syncs the board to the server with `/api/set_state`, claims the engine lock, calls
-the relevant endpoint, and releases the lock when the move comes back.
+move claims the engine lock, gets the move, and releases the lock when it comes back.
+The neural opponent syncs the board to the server with `/api/set_state` and calls
+`/api/ai_move`; the minimax opponent searches in this browser (`engine.js`).
+
+### Browser engine
+
+`static/engine/connect4_engine.{js,wasm}` is the C++ engine compiled to WebAssembly
+(about 200 KB). [`static/js/engine.js`](static/js/engine.js) runs it in a module Web
+Worker ([`engineWorker.js`](static/js/engineWorker.js)) so a search never blocks the
+page, and exposes two calls:
+
+*   `analyze(moves, onSnapshot)` - the engine's `analyze` command. Each completed
+    iteration arrives as a snapshot for the analysis panel; the handle it returns
+    cancels the search.
+*   `bestMove(moves)` - the engine's `bestmove` command: the Strong V4 bot with a
+    3-second limit, as the Playground plays it.
+
+A search is one synchronous call inside the worker, so cancelling terminates the
+worker and the next request starts a fresh one. One worker serves the tab, and a new
+request cancels the running one. The engine reports the same depths and scores as a
+native build, at roughly 1.2–1.4x the time (WebAssembly has no AVX2, so it uses the
+engine's scalar code). Each search allocates a 64 MiB table, so the tab uses around
+100 MB more memory while analyzing.
+
+To rebuild after changing the engine, install
+[Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and run the
+engine repo's `./build.ps1 -Wasm -DeployWeb` (Windows) or
+`./build_wasm.sh <path-to-this-repo>` (Linux/macOS). Both copy the two files into
+`static/engine/`. Flask serves `.wasm` as `application/wasm`, which browsers need to
+compile it while it downloads.
 
 ---
 
@@ -186,10 +211,10 @@ first. Automatic opponents are suspended while this tab is analyzing.
     says so.
     Because every column is valued anyway, this setting is **display only**: changing
     it re-ranks the rows already on screen and never restarts the search, so a running
-    analysis keeps its table, its depth and any proof progress. The server always
-    collects all sixteen ranked rows; each tab draws as many as it is set to show.
+    analysis keeps its table, its depth and any proof progress. The engine always
+    reports all sixteen ranked rows; the panel draws as many as it is set to show.
 * The search retains its transposition table while deepening through **1, 2, 3,
-    … plies**. The server keeps completed **even depths (2, 4, 6, …) for Light's
+    … plies**. The panel keeps completed **even depths (2, 4, 6, …) for Light's
     turn** and **odd depths (1, 3, 5, …) for Dark's turn** for display. This keeps
     the nominal leaf side consistent across turns. Fully proved results and game
     over are always shown, even if the engine stops on the other parity. Filtering
@@ -217,38 +242,33 @@ first. Automatic opponents are suspended while this tab is analyzing.
     **shared board**, creating a new continuation. Merely expanding a line does not
     change the board. Remote moves, undo, reset, and imported histories restart
     analysis; stale results never replace the new position's evaluation.
-* **Pause** frees the engine and retains the last completed evaluation. **Resume**
+* **Pause** stops the engine and retains the last completed evaluation. **Resume**
     starts a new search. Hiding a tab suspends its search; returning restarts it.
     Terminal positions have no candidate rows. Searching finishes when all root
     distances (or draws) are resolved, or the 30-minute safety limit expires.
     A pause/timeout during refinement keeps the WDL results and every distance
     already completed; it never fabricates a distance for unfinished rows.
 
-Implementation: [analysis.py](analysis.py) owns short-lived job snapshots and
-background subprocess readers; [static/js/analysis.js](static/js/analysis.js)
-polls every 700 ms without holding Flask's single HTTP worker. Each job owns a
-64 MiB TT. At most two engines run per server process; additional requests get a
-clear 429 response. Engines run below normal priority on Windows. A 20-second
-heartbeat lease kills abandoned jobs (including interrupted start requests).
-These limits are per Flask process; multi-process hosting would need shared job
-routing. Existing synchronous neural/minimax requests can still delay HTTP
-responses; analysis itself does not block the request thread.
-
-Build and deploy using the sibling engine's [build script](../connect4-c++/build.ps1)
-with `-Tests -DeployWeb`, then restart Flask. The executable protocol is
-`analyze <comma-separated-history-or-dash> <top> [maxDepth] [milliseconds]` and
-emits one flushed JSON object per line (`iteration`, `terminal`, `done`).
+Analysis runs entirely in this tab's browser engine (see [Browser engine](#browser-engine)),
+so it costs the server nothing, works for any number of viewers at once, and keeps
+running if the server is busy. [static/js/analysis.js](static/js/analysis.js) owns the
+panel; `engine.js` folds the engine's output into the snapshots it draws. The
+engine's `analyze` command emits one JSON object per line (`iteration`, `terminal`,
+`done`) and is the same code as the native executable's
+`analyze <comma-separated-history-or-dash> <top> [maxDepth] [milliseconds]`.
 Iterations include `phase` (`search`, `mate`, `complete`) and `mate_complete`.
 `complete` retains its original meaning of all outcomes being proved; it does
 not by itself mean mate refinement finished. Rows include `mate_exact` and
 nullable `mate_plies`; a WDL score of +/-30000 is **not** mate in zero.
-Tests: `python -m unittest test_analysis test_puzzle_bank -v`; the engine integration
-tests require a deployed analysis-capable executable. The C++ V3 suite also checks
+Tests: `node --test tests/engine.test.mjs` checks the worker protocol (depth parity,
+errors, cancellation) against a fake worker, then loads the real WebAssembly engine to
+check ranked rows at every depth, terminal positions, immediate wins and blocks, the
+minimax time limit, and exact mate distances against an exhaustive oracle.
+`python -m unittest test_puzzle_bank -v` covers the puzzle bank. The C++ V3 suite also checks
 every-depth publication, both score orientations, and legal continuations.
 The separate C++ mate-distance suite compares every root move against exhaustive
 DTM minimax on 300 positions, including forced losses, draws, cold/warm/color-swapped
-tables, and interrupted refinement. Python integration tests independently check
-late-game distances for both players. Serve [tests/analysis_panel.html](tests/analysis_panel.html)
+tables, and interrupted refinement. Serve [tests/analysis_panel.html](tests/analysis_panel.html)
 from this directory for renderer assertions without loading the neural model.
 
 ---
@@ -354,7 +374,7 @@ before they existed.
 ```
 
 Run `app.py` directly rather than `flask run`: the entry point sets `threaded=False`,
-which the shared model and engine subprocess depend on. Startup prints the device, the
+which the shared model and the puzzle generator's engine subprocess depend on. Startup prints the device, the
 architecture detected in the checkpoint, and the puzzle-bank counts. Then open
 <http://127.0.0.1:5000>.
 
@@ -368,22 +388,26 @@ list; the app itself only needs flask, torch and numpy.
 ```
 /connect4-web-app/
 ├── bin/
-│   └── connect4_3D.exe     # C++ minimax engine; also the puzzle generator
+│   └── connect4_3D.exe     # C++ engine, used here as the puzzle generator
 ├── models/
 │   └── model_best.pth      # trained PyTorch checkpoint (gitignored)
 ├── puzzles/                # puzzle bank, mate_in_<k>.txt
 ├── static/
+│   ├── engine/             # C++ engine as WebAssembly (connect4_engine.js + .wasm)
 │   ├── css/style.css
 │   ├── css/analysis.css
 │   ├── js/
-│   │   ├── analysis.js     # analysis panel, engine request loop
+│   │   ├── analysis.js     # analysis panel
 │   │   ├── columnLabels.js # 0- vs 1-based column numbering, display side only
+│   │   ├── engine.js       # browser engine: analyze(), bestMove(), worker lifecycle
+│   │   ├── engineWorker.js # Web Worker hosting the WebAssembly engine
 │   │   ├── gameLogic.js    # client-side rules mirror
 │   │   ├── main.js         # scene, input, game flow, puzzle mode, settings
 │   │   └── sync.js         # room protocol, client half
 │   ├── models/Piece.fbx    # piece mesh
 │   └── textures/           # 512px piece maps, built from textures/
 ├── templates/index.html
+├── tests/                  # engine.test.mjs (node --test), analysis_panel.html
 ├── textures/               # 4k texture sources (clay_floor_001, oak_veneer_01)
 ├── tools/
 │   └── build_textures.py   # textures/ -> static/textures/ (needs Pillow)
@@ -404,8 +428,8 @@ list; the app itself only needs flask, torch and numpy.
     on restart.
 *   Room state is not persisted and rooms have no access control. Anyone who knows the
     URL can move in a room.
-*   AI strength is fixed: 500 MCTS simulations, and whatever depth the minimax engine
-    picks on its own.
+*   AI strength is fixed: 500 MCTS simulations, and 3 seconds of minimax search on the
+    viewer's own machine, so the minimax opponent is stronger on faster computers.
 *   Puzzle coverage is thin above mate-in-5, and generation is slow to improve it.
 *   Three.js is loaded from a CDN, so the first load needs internet access.
 

@@ -1,7 +1,9 @@
 import { formatColumn, onColumnNumberingChange } from './columnLabels.js';
+import { analyze, newAnalysisSnapshot } from './engine.js';
 
-// One serialized request loop per tab. Revisions prevent late responses from
-// painting a different board; only complete engine iterations replace the lines.
+// One analysis job per tab, run by the in-browser engine. Revisions keep a
+// cancelled job from painting a different board; only complete engine
+// iterations replace the lines.
 export class AnalysisPanel {
     // onBest receives the column the engine currently likes, or null whenever there is
     // nothing to point at (no completed iteration yet, game over, analysis off, or the
@@ -13,7 +15,6 @@ export class AnalysisPanel {
         this.moves = [];
         this.revision = 0;
         this.job = null;
-        this.busy = false;
         this.failed = false;
         this.finished = false;
         this.last = null;
@@ -65,10 +66,6 @@ export class AnalysisPanel {
             if (document.hidden) this.status('Suspended while tab is hidden');
             this.tick();
         });
-        window.addEventListener('pagehide', () => {
-            if (this.job) navigator.sendBeacon(`/api/analysis/${this.job.id}/stop`, '');
-        });
-        setInterval(() => this.tick(), 700);
     }
 
     setEnabled(enabled) {
@@ -135,48 +132,32 @@ export class AnalysisPanel {
         this.el('analysis-status').classList.toggle('thinking', thinking);
     }
 
-    async request(url, options = {}) {
-        const response = await fetch(url, { cache: 'no-store', signal: AbortSignal.timeout(10000), ...options });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.error || 'Analysis request failed.');
-        return data;
-    }
-
-    async tick() {
-        if (this.busy) return;
-        this.busy = true;
+    // Starts, stops or restarts the engine to match the panel's state. Updates
+    // arrive as the engine completes iterations; nothing is polled.
+    tick() {
         const revision = this.revision;
-        try {
-            const wanted = this.enabled && !this.paused && !document.hidden;
-            if (this.job && (!wanted || this.job.revision !== revision)) {
-                const old = this.job;
+        const wanted = this.enabled && !this.paused && !document.hidden;
+        if (this.job && (!wanted || this.job.revision !== revision)) {
+            this.job.cancel();
+            this.job = null;
+        }
+        if (!wanted || this.failed || this.job) return;
+        const job = analyze(this.moves, data => {
+            if (this.job !== job || revision !== this.revision) return;
+            if (data.error) {
                 this.job = null;
-                await this.request(`/api/analysis/${old.id}/stop`, { method: 'POST' });
-            }
-            if (!wanted || this.failed || revision !== this.revision) return;
-            if (!this.job) {
-                const data = await this.request('/api/analysis/start', {
-                    method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ moves: this.moves, top: Number(this.el('analysis-top').value) }),
-                });
-                this.job = { id: data.job_id, revision };
-            }
-            if (revision !== this.revision) return;
-            const data = await this.request(`/api/analysis/${this.job.id}`);
-            if (revision !== this.revision) return;
-            if (data.error) throw new Error(data.error);
-            this.render(data);
-        } catch (error) {
-            if (revision === this.revision) {
                 this.failed = true;
                 this.paused = true;
                 this.el('analysis-pause').textContent = 'Resume';
-                this.status(error.message);
+                this.status(data.error);
+                return;
             }
-        } finally {
-            this.busy = false;
-            if (revision !== this.revision) queueMicrotask(() => this.tick());
-        }
+            this.render(data);
+        });
+        job.revision = revision;
+        this.job = job;
+        // Show that the search is running before its first depth completes.
+        this.render(newAnalysisSnapshot(this.moves));
     }
 
     scoreText(row) {

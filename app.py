@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from flask import Flask, render_template, request, jsonify, session
-import subprocess
+import mimetypes
 import os
 import re
 
@@ -12,9 +12,13 @@ from ai_agent import ResNet3D, MCTS
 from puzzle_bank import (PuzzleBank, GenerationManager,
                          CATEGORIES, CATEGORY_BY_KEY, category_for_mate, mate_length)
 from room_state import RoomRegistry, clean_client_id
-from analysis import AnalysisManager, analysis_blueprint
 
 # --- 1. INITIALIZATION ---
+
+# Analysis mode and the minimax opponent run the C++ engine in the browser, as
+# WebAssembly (static/engine/, see static/js/engine.js). Some platforms' MIME tables
+# lack .wasm, and browsers only stream-compile a module served as application/wasm.
+mimetypes.add_type('application/wasm', '.wasm')
 
 # Create the Flask application
 app = Flask(__name__)
@@ -95,8 +99,6 @@ mcts = MCTS(game, args, model)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PUZZLE_DIR = os.path.join(BASE_DIR, 'puzzles')
 ENGINE_EXE = os.path.join(BASE_DIR, 'bin', 'connect4_3D.exe')
-analysis_manager = AnalysisManager(ENGINE_EXE)
-app.register_blueprint(analysis_blueprint(analysis_manager))
 
 puzzle_bank = PuzzleBank(PUZZLE_DIR)
 generation_manager = GenerationManager(
@@ -157,62 +159,6 @@ def ai_move():
 
     # The frontend will handle state updates. Just return the move.
     return jsonify({"move": ai_action})
-
-@app.route('/api/minimax_move', methods=['POST'])
-def minimax_move():
-    """
-    Gets a move from the external C++ minimax executable.
-    Expects a JSON body with two hex strings: {'hex_p1': '...', 'hex_p2': '...'}
-    Returns a simple JSON response with the move: {'move': <int>}
-    """
-    data = request.get_json()
-    hex_p1 = data.get('hex_p1')
-    hex_p2 = data.get('hex_p2')
-
-    if not hex_p1 or not hex_p2:
-        return jsonify({"error": "Missing hex codes for one or both players."}), 400
-
-    try:
-        executable_path = os.path.join('bin', 'connect4_3D.exe')
-        
-        engine = subprocess.Popen(
-            [executable_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-        
-        # Drive the engine's interactive menu:
-        #   16, 4     -> select Strong V4 (hole-aware evaluation) as the active bot
-        #   10, <hex> -> paste the board code
-        #   1, 2      -> play against the bot, "auto" so the bot moves immediately
-        #   m, 99     -> back to the menu and exit
-        engine.stdin.write("16\n4\n10\n")
-        engine.stdin.write(f"{hex_p1} {hex_p2}\n1\n2\nm\n99\n")
-        engine.stdin.flush()
-
-        # Read output
-        stdout, stderr = engine.communicate()
-        print(f"Engine stdout:\n {stdout}")
-        if engine.returncode != 0:
-            raise Exception(f"Engine exited with error code {engine.returncode}: {stderr}")
-
-        # Find the move in the output
-        match = re.search(r'played move:\s*(\d+)', stdout)
-        if not match:
-            raise Exception(f"Could not find move in engine output. Output: {stdout}")
-            
-        ai_action = int(match.group(1))
-        
-        # Return just the move
-        return jsonify({"move": ai_action})
-
-    except Exception as e:
-        print(f"Error during minimax move calculation: {e}")
-        return jsonify({"error": "Failed to get move from minimax AI."}), 500
 
 
 @app.route('/api/set_state', methods=['POST'])
