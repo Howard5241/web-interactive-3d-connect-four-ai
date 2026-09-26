@@ -5,6 +5,7 @@ import { ConnectFour3D } from './gameLogic.js';
 import { RoomSync } from './sync.js';
 import { AnalysisPanel } from './analysis.js';
 import { bestMove } from './engine.js';
+import { aiMove } from './nnAgent.js';
 import {
     columnRange, columnTag, formatColumn, formatColumns,
     onColumnNumberingChange, parseColumn, setColumnText, setOneIndexed,
@@ -1459,8 +1460,8 @@ function logMessage(message) {
 
 function setButtonsDisabled(state) {
     NEW_GAME_BTN.disabled = state;
-    // The AI and the C++ engine are single instances on the server, so while one viewer
-    // has a search running nobody else may start another.
+    // While one viewer has a search running nobody else may start another: its move
+    // would land on a board that is about to change.
     AI_MOVE_BTN.disabled = state || engineBusyElsewhere();
     MINIMAX_MOVE_BTN.disabled = state || engineBusyElsewhere();
     UNDO_BTN.disabled = state || engineBusyElsewhere() || currentMoveIndex === 0;
@@ -1502,11 +1503,6 @@ async function startNewGame() {
     isRequestInProgress = true;
 
     try {
-        // Reset server state for AI
-        const response = await fetch('/api/new_game', { method: 'POST' });
-        if (!response.ok) throw new Error('Network response was not ok');
-        
-        // Reset local state
         boardState = game.getInitialState();
         moveHistory = [];
         currentMoveIndex = 0;
@@ -1696,24 +1692,15 @@ async function requestAIMove() {
     await setEngineBusy('ai');
 
     try {
-        // Add a small delay for better UX
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        // We need to make sure the server has the latest state before asking for an AI move.
-        await fetch('/api/set_state', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                board_state: boardState,
-                move_history: moveHistory
-            }),
+        // Searched in this browser (see nnAgent.js); we are at the latest move, so
+        // the history is exactly the board on screen.
+        const { move } = await aiMove(moveHistory, {
+            onStatus: status => {
+                if (status === 'loading') logMessage('Loading the AI into this browser...');
+                else logMessage(`AI loaded (${status === 'webgpu' ? 'WebGPU' : 'WebAssembly'}).`);
+            },
+            onProgress: (done, total) => setColumnText(STATUS_MSG, `AI is thinking... ${done}/${total} 🤔`),
         });
-
-        const response = await fetch('/api/ai_move', { method: 'POST' });
-        if (!response.ok) throw new Error('AI server error.');
-        
-        const data = await response.json();
-        const move = data.move;
 
         // Apply the move returned by the AI
         const dropCoords = game.getLandingPosition(boardState, move);

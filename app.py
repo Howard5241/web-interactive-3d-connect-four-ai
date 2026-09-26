@@ -1,23 +1,18 @@
-import torch
-import torch.nn as nn
-import numpy as np
 from flask import Flask, render_template, request, jsonify, session
 import mimetypes
 import os
-import re
 
 # --- Local Imports ---
-from game_logic import ConnectFour3D
-from ai_agent import ResNet3D, MCTS
 from puzzle_bank import (PuzzleBank, GenerationManager,
                          CATEGORIES, CATEGORY_BY_KEY, category_for_mate, mate_length)
 from room_state import RoomRegistry, clean_client_id
 
 # --- 1. INITIALIZATION ---
 
-# Analysis mode and the minimax opponent run the C++ engine in the browser, as
-# WebAssembly (static/engine/, see static/js/engine.js). Some platforms' MIME tables
-# lack .wasm, and browsers only stream-compile a module served as application/wasm.
+# Analysis mode, the minimax opponent and the neural-network opponent all run in the
+# browser (static/engine/, static/nn/; see static/js/engine.js and nnAgent.js). Some
+# platforms' MIME tables lack .wasm, and browsers only stream-compile a module served
+# as application/wasm.
 mimetypes.add_type('application/wasm', '.wasm')
 
 # Create the Flask application
@@ -25,73 +20,14 @@ app = Flask(__name__)
 # A secret key is required for using sessions
 app.secret_key = 'a-super-secret-key-for-your-app' 
 
-# Set up PyTorch device
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
 
-# Game and AI Hyperparameters (should match your trained model's config)
-args = {
-    'C': 2.0,
-    'num_simulations': 500, # Number of MCTS simulations for AI move
-    # Add other args if your MCTS needs them (e.g., dirichlet)
-    'dirichlet_epsilon': 0.0,
-    'dirichlet_alpha': 0.3,
-}
-
-# --- 2. LOAD THE MODEL (ONCE AT STARTUP) ---
-
-def detect_model_config(state_dict):
-    """
-    Infer the ResNet3D architecture (num_resBlocks, num_hidden) directly from a
-    saved state_dict, so app.py stays in sync with whatever checkpoint is loaded
-    instead of relying on hard-coded hyperparameters.
-
-    - num_hidden  = out-channels of the start block conv (Conv3d(4, num_hidden, ...)),
-                    i.e. the first dimension of 'startBlock.0.weight'.
-    - num_resBlocks = number of residual blocks in the backbone, i.e. one more than
-                    the highest index seen in 'backBone.<i>.*' keys.
-    """
-    num_hidden = state_dict['startBlock.0.weight'].shape[0]
-
-    block_indices = set()
-    for key in state_dict:
-        m = re.match(r'backBone\.(\d+)\.', key)
-        if m:
-            block_indices.add(int(m.group(1)))
-    num_resBlocks = (max(block_indices) + 1) if block_indices else 0
-
-    return num_resBlocks, num_hidden
-
-# Instantiate the game
-game = ConnectFour3D()
-
-# Load the trained model weights, auto-detecting the architecture from the checkpoint
-model_path = 'models/model_best.pth' # Make sure this path is correct
-try:
-    state_dict = torch.load(model_path, map_location=device)
-    # Unwrap common checkpoint containers if the file isn't a bare state_dict.
-    if 'startBlock.0.weight' not in state_dict:
-        for key in ('state_dict', 'model_state_dict', 'model'):
-            if isinstance(state_dict.get(key), dict):
-                state_dict = state_dict[key]
-                break
-
-    # Detect architecture from the weights and keep `args` in sync.
-    num_resBlocks, num_hidden = detect_model_config(state_dict)
-    n_params = sum(v.numel() for v in state_dict.values())
-    print(f"Detected model architecture: num_resBlocks={num_resBlocks}, "
-          f"num_hidden={num_hidden} ({n_params:,} parameters)")
-
-    model = ResNet3D(game, num_resBlocks, num_hidden, device)
-    model.load_state_dict(state_dict)
-    model.eval() # Set the model to evaluation mode
-    print(f"Model loaded successfully from {model_path}")
-except FileNotFoundError:
-    print(f"ERROR: Model file not found at {model_path}. The AI will not work.")
-    model = None # Set model to None to handle the error gracefully
-
-# Instantiate the MCTS search
-mcts = MCTS(game, args, model)
+@app.after_request
+def cross_origin_isolate(response):
+    # Cross-origin isolation lets the in-browser AI run WebAssembly on several threads
+    # when WebGPU is unavailable.
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Embedder-Policy'] = 'require-corp'
+    return response
 
 
 # --- 2b. PUZZLE BANK (engine-generated puzzles for Puzzle Mode) ---
@@ -124,60 +60,6 @@ rooms = RoomRegistry()
 def index():
     """ Renders the main game page. """
     return render_template('index.html')
-
-@app.route('/api/new_game', methods=['POST'])
-def new_game():
-    """ Starts a new game by resetting the board state in the session. """
-    initial_state = game.get_initial_state()
-    session['board_state'] = initial_state.tolist()
-    session['move_history'] = []  # Reset move history
-    return jsonify({
-        "message": "New game started!",
-        "board": session['board_state'],
-        "move_history": session['move_history']
-    })
-
-
-# ENDPOINT: Handles only the AI's move
-@app.route('/api/ai_move', methods=['POST'])
-def ai_move():
-    """ Takes the current board state and computes the AI's response. """
-    if model is None:
-        return jsonify({"error": "AI Model is not loaded!"}), 500
-
-    # Retrieve the board state (which now includes the player's last move)
-    board_state_list = session.get('board_state')
-    move_history = session.get('move_history', [])
-    if board_state_list is None:
-        return jsonify({"error": "Game not started."}), 400
-    
-    state = np.array(board_state_list, dtype=np.int8)
-
-    # --- AI's Move ---
-    ai_action_probs = mcts.search(state)
-    ai_action = int(np.argmax(ai_action_probs))
-
-    # The frontend will handle state updates. Just return the move.
-    return jsonify({"move": ai_action})
-
-
-@app.route('/api/set_state', methods=['POST'])
-def set_state():
-    """
-    Explicitly sets the board state and move history in the session.
-    """
-    data = request.get_json()
-    board_state = data.get('board_state')
-    move_history = data.get('move_history')
-
-    if board_state is None or move_history is None:
-        return jsonify({"error": "Missing board_state or move_history."}), 400
-
-    session['board_state'] = board_state
-    session['move_history'] = move_history
-
-    return jsonify({"message": "State updated successfully."})
-
 
 # --- SHARED ROOM ENDPOINTS ---
 #
@@ -335,5 +217,4 @@ def generate_status():
 # --- RUN THE APP ---
 
 if __name__ == '__main__':
-    # Use threaded=False to avoid issues with PyTorch model in multi-threaded context
     app.run(debug=True, threaded=False, port=5000)
