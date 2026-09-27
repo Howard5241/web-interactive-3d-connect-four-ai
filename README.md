@@ -1,10 +1,9 @@
 # 3D Connect Four (web app)
 
 Connect Four on a 4x4x4 grid, played in the browser. A Flask backend serves a three.js
-board and provides two opponents: a PyTorch ResNet + MCTS agent, and the C++ minimax
-engine from `connect4-c++/`. The minimax engine and analysis mode run **in the browser**,
-as a WebAssembly build of that engine, the way chess sites run their engine locally for
-self-analysis. There is also a puzzle mode backed by an engine-generated
+board. There are two opponents, a ResNet + MCTS agent and the C++ minimax engine from
+`connect4-c++/`, and both run **in the browser**, along with analysis mode, the way
+chess sites run their engine locally for self-analysis. There is also a puzzle mode backed by an engine-generated
 puzzle bank, and a shared-room mode so several browsers can look at and play the same
 board.
 
@@ -20,9 +19,8 @@ board.
     veneer, textured from `static/textures/` — see [Piece textures](#piece-textures).
 *   **Two opponents.**
     *   Neural network: a `ResNet3D` policy/value network (10 residual blocks, 128
-        channels, ~9.0M parameters) searched with MCTS at 500 simulations per move.
-        The architecture is read out of the checkpoint at startup, so swapping in a
-        differently-shaped `.pth` does not need a code change.
+        channels, ~9.0M parameters) searched with MCTS at 500 simulations per move, run
+        in your browser with ONNX Runtime Web. See [Browser AI](#browser-ai).
     *   Minimax: the C++ Strong V4 engine, compiled to WebAssembly and run in a Web
         Worker in your browser (3 seconds per move). See [Browser engine](#browser-engine).
     *   Either can be set to move automatically after yours, from the settings panel.
@@ -64,11 +62,11 @@ board.
 | Component | Technology | Role |
 | :-------- | :--------- | :--- |
 | Backend  | Python 3.11 + Flask 3.1 | Serves the page and the REST API. |
-|          | PyTorch 2.9 (CUDA if available) | Runs the `ResNet3D` checkpoint for the MCTS agent. |
-|          | NumPy | Board representation and game rules. |
+|          | PyTorch 2.9 + onnx | Only for `tools/export_onnx.py`, which exports the checkpoint for the browser. |
 |          | `bin/connect4_3D.exe` | C++ engine; generates puzzles via its `genpuzzle` CLI. |
 | Frontend | JavaScript (ES modules) | Game flow, input, API calls, room sync. |
 |          | `static/engine/` (WebAssembly) | The same C++ engine, run in a Web Worker for analysis and the minimax opponent. |
+|          | `static/nn/model.onnx` + ONNX Runtime Web 1.30 (jsDelivr CDN) | The `ResNet3D` network for the MCTS agent, on WebGPU or WebAssembly. |
 |          | three.js 0.160 (unpkg CDN, via import map) | Rendering, camera, FBX loading. Needs network access on first load. |
 |          | HTML5 / CSS3 | Page structure and UI. |
 
@@ -78,17 +76,14 @@ board.
 
 ### Backend
 
-`app.py` loads the model once at startup, loads the puzzle bank from `puzzles/`, and
-creates the room registry. It runs single-threaded (`threaded=False`) because the
-PyTorch model and the puzzle generator's engine subprocess are shared, unsynchronised
-state. The server does not run analysis or minimax searches; browsers do.
+`app.py` loads the puzzle bank from `puzzles/` and creates the room registry. It runs
+single-threaded (`threaded=False`) because the puzzle generator's engine subprocess is
+shared, unsynchronised state. The server does not run the AI, minimax or analysis;
+browsers do. Every response carries COOP/COEP headers so the page is cross-origin
+isolated, which lets the browser AI use several WebAssembly threads.
 
 Endpoints:
 
-*   `POST /api/new_game` - reset the board in the Flask session.
-*   `POST /api/ai_move` - run MCTS on the session's board and return the chosen column.
-*   `POST /api/set_state` - set the session's board and move history, used to sync
-    before asking for an AI move.
 *   `GET /api/room/state` - poll a room for changes; doubles as the presence heartbeat.
 *   `POST /api/room/state` - push a partial state patch to a room.
 *   `POST /api/room/leave` - drop a viewer from the presence list on tab close.
@@ -110,8 +105,8 @@ implements the room protocol.
 
 A local move is applied on screen first, then pushed to the room. Asking for an engine
 move claims the engine lock, gets the move, and releases the lock when it comes back.
-The neural opponent syncs the board to the server with `/api/set_state` and calls
-`/api/ai_move`; the minimax opponent searches in this browser (`engine.js`).
+Both opponents search in this browser: the neural one in `nnAgent.js`, the minimax one
+in `engine.js`.
 
 ### Browser engine
 
@@ -139,6 +134,29 @@ engine repo's `./build.ps1 -Wasm -DeployWeb` (Windows) or
 `./build_wasm.sh <path-to-this-repo>` (Linux/macOS). Both copy the two files into
 `static/engine/`. Flask serves `.wasm` as `application/wasm`, which browsers need to
 compile it while it downloads.
+
+### Browser AI
+
+The AI Move button runs the `ResNet3D` network and the same MCTS as `ai_agent.py`
+(500 simulations, C = 2, most-visited move) in a module Web Worker
+([`nnWorker.js`](static/js/nnWorker.js)), so the page stays responsive while it thinks.
+[`nnMcts.js`](static/js/nnMcts.js) is the search, [`nnAgent.js`](static/js/nnAgent.js)
+the main-thread side. The network is `static/nn/model.onnx` (36 MB), run with ONNX
+Runtime Web on WebGPU when the browser has it and on WebAssembly otherwise. The worker
+downloads and compiles it on the first AI move and keeps it for the rest of the visit.
+Positions reached by more than one path are evaluated once, which saves roughly a third
+to half of the network calls without changing the result.
+
+It plays the same moves as the old server agent: replaying the network outputs the
+server recorded reproduces its visit counts exactly, and ONNX Runtime's outputs agree
+with PyTorch's to about 1e-5.
+
+After replacing `models/model_best.pth`, run `python tools/export_onnx.py` to refresh
+`static/nn/model.onnx`. The architecture is read from the checkpoint.
+
+Tests: `node --test tests/nnAgent.test.mjs` checks the rules against `gameLogic.js`,
+the search against recorded server searches (`tests/fixtures/`), and the worker
+protocol.
 
 ---
 
@@ -361,10 +379,9 @@ before they existed.
 
 ### Prerequisites
 
-*   Python 3.11 with `flask`, `torch` and `numpy`. In this checkout the environment lives
-    outside the repo at `..\venv` (see the top-level `CLAUDE.md`).
-*   `models/model_best.pth` - the trained checkpoint. It is gitignored, so it has to be
-    copied in.
+*   Python 3.11 with `flask`. In this checkout the environment lives outside the repo at
+    `..\venv` (see the top-level `CLAUDE.md`).
+*   `static/nn/model.onnx` - the exported network, committed with the app.
 *   `bin/connect4_3D.exe` - build it from `connect4-c++/`, or copy an existing build.
 
 ### Start the server
@@ -374,12 +391,13 @@ before they existed.
 ```
 
 Run `app.py` directly rather than `flask run`: the entry point sets `threaded=False`,
-which the shared model and the puzzle generator's engine subprocess depend on. Startup prints the device, the
-architecture detected in the checkpoint, and the puzzle-bank counts. Then open
+which the puzzle generator's engine subprocess depends on. Startup prints the
+puzzle-bank counts. Then open
 <http://127.0.0.1:5000>.
 
 `requirements.txt` is a full freeze of the shared environment, not a minimal dependency
-list; the app itself only needs flask, torch and numpy.
+list; the app itself only needs flask. torch and onnx are only needed to export a new
+checkpoint.
 
 ---
 
@@ -390,10 +408,11 @@ list; the app itself only needs flask, torch and numpy.
 ├── bin/
 │   └── connect4_3D.exe     # C++ engine, used here as the puzzle generator
 ├── models/
-│   └── model_best.pth      # trained PyTorch checkpoint (gitignored)
+│   └── model_best.pth      # trained PyTorch checkpoint (Git LFS)
 ├── puzzles/                # puzzle bank, mate_in_<k>.txt
 ├── static/
 │   ├── engine/             # C++ engine as WebAssembly (connect4_engine.js + .wasm)
+│   ├── nn/model.onnx       # the ResNet3D network for the browser AI
 │   ├── css/style.css
 │   ├── css/analysis.css
 │   ├── js/
@@ -403,15 +422,19 @@ list; the app itself only needs flask, torch and numpy.
 │   │   ├── engineWorker.js # Web Worker hosting the WebAssembly engine
 │   │   ├── gameLogic.js    # client-side rules mirror
 │   │   ├── main.js         # scene, input, game flow, puzzle mode, settings
+│   │   ├── nnAgent.js      # browser AI: aiMove(), worker lifecycle
+│   │   ├── nnMcts.js       # MCTS and rules for the browser AI
+│   │   ├── nnWorker.js     # Web Worker running the network with ONNX Runtime Web
 │   │   └── sync.js         # room protocol, client half
 │   ├── models/Piece.fbx    # piece mesh
 │   └── textures/           # 512px piece maps, built from textures/
 ├── templates/index.html
-├── tests/                  # engine.test.mjs (node --test), analysis_panel.html
+├── tests/                  # engine.test.mjs, nnAgent.test.mjs (node --test), analysis_panel.html
 ├── textures/               # 4k texture sources (clay_floor_001, oak_veneer_01)
 ├── tools/
-│   └── build_textures.py   # textures/ -> static/textures/ (needs Pillow)
-├── ai_agent.py             # ResNet3D, MCTS, Node
+│   ├── build_textures.py   # textures/ -> static/textures/ (needs Pillow)
+│   └── export_onnx.py      # models/model_best.pth -> static/nn/model.onnx
+├── ai_agent.py             # ResNet3D, MCTS, Node (training side; the browser runs nnMcts.js)
 ├── app.py                  # Flask server and API
 ├── game_logic.py           # backend ConnectFour3D rules
 ├── puzzle_bank.py          # puzzle bank + background generation manager
@@ -429,9 +452,13 @@ list; the app itself only needs flask, torch and numpy.
 *   Room state is not persisted and rooms have no access control. Anyone who knows the
     URL can move in a room.
 *   AI strength is fixed: 500 MCTS simulations, and 3 seconds of minimax search on the
-    viewer's own machine, so the minimax opponent is stronger on faster computers.
+    viewer's own machine, so the minimax opponent is stronger on faster computers. The
+    neural opponent plays the same move anywhere but takes longer on slower ones,
+    especially without WebGPU, and its first move downloads about 60 MB (the network
+    plus ONNX Runtime), which the browser then caches.
 *   Puzzle coverage is thin above mate-in-5, and generation is slow to improve it.
-*   Three.js is loaded from a CDN, so the first load needs internet access.
+*   Three.js and ONNX Runtime Web are loaded from CDNs, so the first load needs internet
+    access.
 
 ## Not done yet
 
