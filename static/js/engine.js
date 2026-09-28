@@ -1,13 +1,7 @@
-// The V4 engine, running in this browser: a WebAssembly build of the C++ engine
-// (static/engine/, built by build_wasm.sh in the engine repo) inside a Web Worker.
-//
-// One worker serves the whole tab. A search is a single synchronous call inside
-// it, so the only way to stop one is to terminate the worker; the next request
-// starts a fresh one. Starting a request cancels whatever was running.
+// The C++ engine as WebAssembly (static/engine/) in a Web Worker. A search is one
+// synchronous call, so cancelling terminates the worker; a new request cancels the old one.
 
-// Analysis limits: every root move ranked, full depth, the engine's 30-minute cap.
 const ANALYSIS = { top: 16, depth: 64, ms: 1800000 };
-// The minimax opponent: the Playground's "Strong V4" bot at its 3 s default.
 export const MINIMAX_MS = 3000;
 
 class EngineWorker {
@@ -18,8 +12,7 @@ class EngineWorker {
         this.nextId = 0;
     }
 
-    // Resolves with { exit, error } when the engine returns, or { cancelled: true }.
-    // `onLine` receives each NDJSON line the engine prints while it runs.
+    // Resolves with { exit, error } or { cancelled: true }; onLine gets each NDJSON line.
     run(request, onLine = () => {}) {
         this.cancel();
         const id = ++this.nextId;
@@ -52,7 +45,6 @@ class EngineWorker {
                 job.resolve({ exit: data.exit, error: data.error });
             }
         };
-        // Only reachable if the worker script or engine module fails to load.
         worker.onerror = event => {
             event.preventDefault();
             const job = this.job;
@@ -75,8 +67,7 @@ export function newAnalysisSnapshot(position) {
     };
 }
 
-// Folds one engine line into the snapshot the panel draws. Returns true when the
-// snapshot changed. Throws on output that is not the analysis protocol.
+// Folds one engine line into the snapshot; returns true when it changed.
 export function applyAnalysisLine(snapshot, update) {
     if (!update || !['iteration', 'terminal', 'done'].includes(update.type)) {
         throw new Error('Unsupported engine protocol');
@@ -85,9 +76,7 @@ export function applyAnalysisLine(snapshot, update) {
         snapshot.timed_out = Boolean(update.timed_out);
         return true;
     }
-    // Retain the last iteration of the matching parity: Light uses even depths,
-    // Dark odd. Fully proved results and per-move mate refinements bypass it, as
-    // their depth is not a heuristic horizon.
+    // Keep even depths for Light and odd for Dark; proofs and mate refinement always pass.
     if (update.type === 'iteration' && !update.complete && update.phase !== 'mate'
             && update.depth % 2 !== snapshot.position.length % 2) {
         return false;
@@ -96,9 +85,7 @@ export function applyAnalysisLine(snapshot, update) {
     return true;
 }
 
-// Analyzes `moves` until the search ends or the returned handle is cancelled.
-// `onSnapshot` receives a fresh copy of the snapshot whenever it changes; the last
-// one has running: false, and error set if the engine failed.
+// onSnapshot gets a copy on every change; the last has running: false (and error on failure).
 export function analyze(moves, onSnapshot) {
     const snapshot = newAnalysisSnapshot(moves);
     const publish = () => onSnapshot(structuredClone(snapshot));
@@ -124,7 +111,6 @@ export function analyze(moves, onSnapshot) {
     return job;
 }
 
-// The column the minimax opponent plays after `moves`.
 export async function bestMove(moves, ms = MINIMAX_MS) {
     let reply = null;
     const job = engine.run({ command: 'bestmove', moves, ms }, line => {

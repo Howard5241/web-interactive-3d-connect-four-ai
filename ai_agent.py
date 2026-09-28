@@ -1,21 +1,12 @@
-import random
-import collections
-from tqdm.notebook import trange, tqdm
+import math
+
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import itertools
-import csv
-import os
-import glob
-import re
-from PIL import Image
-import io
-import math
+
 from game_logic import ConnectFour3D
+
 
 def select_move(policy, temperature=1.0, play_best_move=False):
     """
@@ -76,19 +67,16 @@ class ResNet3D(nn.Module):
         super().__init__()
         self.device = device
         
-        # Initial convolutional block
         self.startBlock = nn.Sequential(
             nn.Conv3d(4, num_hidden, kernel_size=3, padding=1),
             nn.BatchNorm3d(num_hidden),
             nn.ReLU()
         )
         
-        # Backbone of residual blocks
         self.backBone = nn.ModuleList(
             [ResidualBlock3d(num_hidden) for _ in range(num_resBlocks)]
         )
         
-        # Policy head
         self.policyHead = nn.Sequential(
             nn.Conv3d(num_hidden, 32, kernel_size=3, padding=1),
             nn.BatchNorm3d(32),
@@ -97,7 +85,6 @@ class ResNet3D(nn.Module):
             nn.Linear(32 * game.depth * game.rows * game.cols, game.num_actions)
         )
         
-        # Value head
         self.valueHead = nn.Sequential(
             nn.Conv3d(num_hidden, 3, kernel_size=3, padding=1),
             nn.BatchNorm3d(3),
@@ -127,11 +114,7 @@ class ResNet3D(nn.Module):
         value = self.valueHead(x)
         
         return policy_logits, value
-    
 
-
-
-    import math
 
 class Node:
     """
@@ -219,43 +202,30 @@ class MCTS:
             A policy vector representing the probability distribution of moves.
         """
         root = Node(self.game, self.args, state)
-        # --- ADD THIS BLOCK FOR EXPLORATION ---
         if add_exploration_noise:
-            # Get policy for the root node to apply noise
             encoded_state = self.game.get_encoded_state(root.state)
             policy_logits, _ = self.model(
                 torch.tensor(encoded_state, device=self.model.device).unsqueeze(0)
             )
             policy = torch.softmax(policy_logits, axis=1).squeeze(0).cpu().numpy()
             valid_moves = self.game.get_valid_moves(root.state)
-            policy *= valid_moves # Mask invalid moves before adding noise
-            
-            # Add Dirichlet noise
+            policy *= valid_moves
             noise = np.random.dirichlet([self.args['dirichlet_alpha']] * self.game.num_actions)
             policy = (1 - self.args['dirichlet_epsilon']) * policy + self.args['dirichlet_epsilon'] * noise
-            
-            # --- FIX: Re-apply the mask after adding noise ---
             policy *= valid_moves
-            
-            # Re-normalize, checking for a sum of zero to avoid errors
             if np.sum(policy) > 0:
                 policy /= np.sum(policy)
-            
-            # Expand the root with the correctly-masked noisy policy
             root.expand(policy)
-        # ----------------------------------------
 
         for _ in range(self.args['num_simulations']):
             node = root
             
-            # 1. Selection
             while node.is_fully_expanded():
                 node = node.select()
                 
             value, is_terminal = self.game.get_value_and_terminated(node.state)
 
             if not is_terminal:
-                # 2. Expansion (only if the node hasn't been expanded, e.g., the root with noise)
                 if not node.is_fully_expanded():
                     encoded_state = self.game.get_encoded_state(node.state)
                     policy_logits, value_tensor = self.model(
@@ -268,18 +238,14 @@ class MCTS:
                     if np.sum(policy) > 0:
                         policy /= np.sum(policy)
                     else:
-                        # Fallback for a garbage policy from the NN:
-                        # This prevents the expansion from creating zero children.
                         policy = valid_moves / np.sum(valid_moves)
                     
                     node.expand(policy)
                     value = value_tensor.item()
                 
 
-            # 3. Backpropagation
             node.backpropagate(value)
             
-        # Return action probabilities based on visit counts
         action_probs = np.zeros(self.game.num_actions)
         for child in root.children:
             action_probs[child.action_taken] = child.visit_count

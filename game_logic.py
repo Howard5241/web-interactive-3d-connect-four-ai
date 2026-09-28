@@ -1,15 +1,8 @@
-import collections
-from tqdm.notebook import trange, tqdm
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
 import itertools
-import csv
-import os
-import glob
-import re
-from PIL import Image
-import io
+
+import numpy as np
+
+
 class ConnectFour3D():
     """
     A class to represent and manage a 3D Connect Four game.
@@ -111,7 +104,7 @@ class ConnectFour3D():
         for z in range(4):
             s += f"\nLayer {z}:\n"
             for r_idx, row in enumerate(state[z, :, :]):
-                s += f" ".join([f"{int(p):2}" for p in row]) + "\n"
+                s += " ".join([f"{int(p):2}" for p in row]) + "\n"
         
         player = self.get_current_player(state)
         s += f"\nTurn: Player {'1 (X)' if player == 1 else '2 (O)'}\n"
@@ -400,6 +393,8 @@ class ConnectFour3D():
         """
         P1_name = args.get('label1', 'Player 1')
         P2_name = args.get('label2', 'Player 2')
+        import matplotlib.pyplot as plt
+
         fig = plt.figure(figsize=(12, 6))
         main_title = title if title else 'Current Board State'
         fig.suptitle(main_title, fontsize=16)

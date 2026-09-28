@@ -1,12 +1,6 @@
-"""Export models/model_best.pth to static/nn/model.onnx for the in-browser AI.
-
-The AI Move button runs this network in the browser with ONNX Runtime Web (see
-static/js/nnAgent.js). Run it after replacing the checkpoint:
+"""models/model_best.pth -> static/nn/model.onnx for the browser AI. Requires torch and onnx.
 
     python tools/export_onnx.py
-
-Requires torch and onnx. The architecture (residual blocks, channels) is read from
-the checkpoint.
 """
 import os
 import re

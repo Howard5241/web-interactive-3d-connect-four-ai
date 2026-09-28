@@ -1,21 +1,11 @@
-// Keeps every browser on the site looking at the same board.
-//
-// The shared state (board, move history, viewed move, planning ghosts, Puzzle Mode)
-// lives on the server in a "room"; this module is the client half of that protocol:
-// it polls for other people's changes, pushes our own, and tracks who else is here.
-// See room_state.py for the server side.
-//
-// Polling rather than a socket is deliberate: the Flask dev server runs single
-// threaded (so the PyTorch model is only ever touched by one request at a time), and a
-// long-lived stream would monopolise that one thread. Each poll is a few bytes when
-// nothing changed.
+// Client half of the shared-room protocol (server side: room_state.py). Polls rather than
+// streams because the single-threaded dev server would be held by a long-lived connection.
 
-const POLL_MS_VISIBLE = 400;    // the tab is on screen: near-live
-const POLL_MS_HIDDEN = 2500;    // backgrounded: just enough to stay in the viewer list
-const POLL_MS_ERROR = 2000;     // server unreachable: back off, keep retrying
+const POLL_MS_VISIBLE = 400;
+const POLL_MS_HIDDEN = 2500;    // enough to stay in the viewer list
+const POLL_MS_ERROR = 2000;
 
-// Per-tab identity. sessionStorage (not localStorage) is the right scope: two tabs of
-// the same browser are two viewers, and a reload keeps the same seat.
+// sessionStorage: two tabs are two viewers, and a reload keeps its seat.
 function loadClientId() {
     const KEY = 'c4-client-id';
     let id = null;
@@ -30,20 +20,15 @@ function loadClientId() {
 }
 
 export class RoomSync {
-    /**
-     * @param {object} handlers
-     *   onState(state, meta)   a new shared state arrived (never our own pushes)
-     *   onPresence(clients)    the viewer list changed
-     *   onLog(entries)         other viewers' log lines (ours are never echoed back)
-     *   onConnection(status)   'online' | 'offline'
-     */
+    // handlers: onState(state, meta), onPresence(clients), onLog(entries),
+    // onConnection('online' | 'offline'). Our own pushes and log lines are never echoed.
     constructor(handlers = {}) {
         this.handlers = handlers;
         this.clientId = loadClientId();
         this.room = new URLSearchParams(location.search).get('room') || 'main';
-        this.version = -1;          // -1 = "we have nothing", so the first poll fetches state
+        this.version = -1;          // nothing yet: the first poll fetches the full state
         this.logSeq = null;
-        this.session = null;        // server process id; a change means it restarted
+        this.session = null;        // changes when the server restarts
         this.clients = [];
         this.online = false;
         this._timer = null;
@@ -51,19 +36,13 @@ export class RoomSync {
         this._stopped = false;
     }
 
-    get me() {
-        return this.clients.find(c => c.id === this.clientId) || null;
-    }
-
     start() {
         this._stopped = false;
         this._poll();
-        // A backgrounded tab polls slowly; coming back should catch up immediately.
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) this.poke();
         });
-        // Free our seat in the viewer list straight away instead of waiting for the
-        // heartbeat to time out. sendBeacon survives the page teardown; fetch may not.
+        // sendBeacon survives page teardown; fetch may not.
         window.addEventListener('pagehide', () => {
             const body = JSON.stringify({ room: this.room, client_id: this.clientId });
             try {
@@ -77,22 +56,14 @@ export class RoomSync {
         clearTimeout(this._timer);
     }
 
-    /** Poll again right now (after a local change, or on becoming visible). */
     poke() {
         if (this._stopped) return;
         clearTimeout(this._timer);
         this._poll();
     }
 
-    /**
-     * Send a partial change to the shared state.
-     * @param {object} patch    the state fields that changed
-     * @param {object} opts
-     *   expect  send our version as base_version, so a move that raced with someone
-     *           else's is rejected rather than silently overwriting theirs
-     *   log     a line for the shared log, attributed to us
-     * @returns {Promise<{ok:boolean, conflict?:boolean, state?:object}>}
-     */
+    // opts.expect sends our version as base_version, so a racing move is rejected (409)
+    // instead of overwriting; opts.log adds a shared log line.
     async push(patch, opts = {}) {
         const body = {
             room: this.room,
@@ -101,7 +72,6 @@ export class RoomSync {
         };
         if (opts.expect && this.version >= 0) body.base_version = this.version;
         if (opts.log) body.log = opts.log;
-        // Our place in the shared log, so the reply carries only what we haven't seen.
         if (this.logSeq !== null) body.log_since = this.logSeq;
 
         this._pushing = true;
@@ -115,9 +85,7 @@ export class RoomSync {
             this._setConnection(true);
 
             if (res.status === 409) {
-                // Someone got there first: nothing of ours was applied. The response
-                // carries the state we missed, and _absorb hands it to onState, so the
-                // caller only has to tell the user their move was undone.
+                // Nothing of ours was applied; _absorb hands the state we missed to onState.
                 this._absorb(data);
                 return { ok: false, conflict: true };
             }
@@ -125,7 +93,6 @@ export class RoomSync {
                 console.warn('Rejected room push:', data.error, patch);
                 return { ok: false, error: data.error };
             }
-            // Success: take the new version. _absorb skips re-applying our own state.
             this._absorb(data);
             return { ok: true, version: data.version };
         } catch (err) {
@@ -133,7 +100,7 @@ export class RoomSync {
             return { ok: false, error: String(err) };
         } finally {
             this._pushing = false;
-            this.poke();   // let everyone else's changes in promptly too
+            this.poke();
         }
     }
 
@@ -141,7 +108,7 @@ export class RoomSync {
         if (this._stopped) return;
         let delay = document.hidden ? POLL_MS_HIDDEN : POLL_MS_VISIBLE;
         try {
-            // A push in flight is about to give us a newer snapshot anyway.
+            // A push in flight returns a newer snapshot anyway.
             if (!this._pushing) {
                 const params = new URLSearchParams({
                     room: this.room,
@@ -163,11 +130,9 @@ export class RoomSync {
         if (!this._stopped) this._timer = setTimeout(() => this._poll(), delay);
     }
 
-    /** Fold a server response into our view of the room. */
     _absorb(data) {
         if (!data) return;
 
-        // The server restarted: its version numbers start again, so ours mean nothing.
         if (this.session && data.session !== this.session) {
             this.version = -1;
             this.logSeq = null;
@@ -182,8 +147,7 @@ export class RoomSync {
         const previousVersion = this.version;
         if (typeof data.version === 'number') this.version = data.version;
 
-        // A state we produced ourselves is already on screen; re-applying it would
-        // restart drop animations and wipe the ghosts we just placed.
+        // Our own state is already on screen.
         if (data.state && data.origin !== this.clientId && data.version !== previousVersion) {
             this.handlers.onState?.(data.state, data);
         }

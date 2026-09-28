@@ -1,32 +1,10 @@
-"""Compile statistics about a V3 puzzle bank (generated_v3.jsonl).
+"""Statistics for a V3 puzzle bank (generated_v3.jsonl): a summary report and an optional
+per-puzzle table. Records are read through puzzle_bank's loader and replayed independently.
 
-Reads the bank through the same validating loader the web app uses
-(`puzzle_bank.parse_generated_file`), replays every recorded line on an
-independent bitboard model, and writes a summary report plus an optional
-per-puzzle table.
-
-Definitions used here, chosen to match the engine (`V3PuzzleGenerator.cpp`):
-
-* A *threat* is a legal empty cell that completes four in a row for the mover.
-  Cells that are not yet reachable (buried under an empty cell) never count.
-* A solver move is **forcing** when it is not itself a win, leaves the solver
-  with at least one legal immediate win, and the opponent's recorded reply
-  occupies one of those winning cells -- i.e. it demanded an immediate block
-  and got one. Everything else the solver plays is **non-forcing**, split into
-  `winning` (the move ends the game), `threat_ignored` (the recorded reply did
-  not block -- legal, because replies only have to preserve the outcome),
-  `threat_at_line_end` (the line stops there, so nothing had to answer) and
-  `quiet` (the move creates no immediate threat at all).
-* A solver move is a **block** under the generator's `IsBlockingMove` rule: it
-  fills one of the opponent's legal immediate winning cells, whether or not it
-  also wins on the spot -- the move was forced either way. `decisive_steps` is
-  `steps - blocks`, the free-decision count the generator ranks lines on and
-  requires two of for any mate in 6 or more.
-
-`distance` is the objective number of plies the game still lasts under perfect
-play, so a win maps to "mate in (distance + 1) // 2" solver moves. It is
-unrelated to `steps`, is optional in the record format, and is reported as
-`unknown` where the generator could not prove one in time.
+A solver move is *forcing* when the opponent's recorded reply blocks an immediate win it
+created, and a *block* (as in the generator's IsBlockingMove) when it fills a cell the
+opponent could have won at. `decisive_steps` = steps - blocks. `distance` is the proved
+plies to the end of the game, so a win is a mate in (distance + 1) // 2.
 
 Usage:
     python puzzle_stats.py [BANK.jsonl] [--csv OUT.csv] [--text OUT.txt]
@@ -348,9 +326,7 @@ def main(argv=None):
 
     if not os.path.exists(args.bank):
         parser.error('no such bank: %s' % args.bank)
-    # Default into the working directory, never beside the bank: PuzzleBank globs
-    # that directory for *.txt and *.jsonl, so a report dropped there would be
-    # offered to the loader as if it were puzzle data.
+    # Never beside the bank: PuzzleBank would load a .txt report as puzzle data.
     csv_path = args.csv or 'puzzle_stats.csv'
     text_path = args.text or 'puzzle_stats.txt'
 

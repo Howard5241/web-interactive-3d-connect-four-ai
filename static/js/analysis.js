@@ -1,14 +1,10 @@
 import { formatColumn, onColumnNumberingChange } from './columnLabels.js';
 import { analyze, newAnalysisSnapshot } from './engine.js';
 
-// One analysis job per tab, run by the in-browser engine. Revisions keep a
-// cancelled job from painting a different board; only complete engine
-// iterations replace the lines.
+// One analysis job per tab; revisions keep a cancelled job from painting a newer board.
 export class AnalysisPanel {
-    // onBest receives the column the engine currently likes, or null whenever there is
-    // nothing to point at (no completed iteration yet, game over, analysis off, or the
-    // board indicator switched off in the panel's settings).
-    // onPlayLine receives a whole continuation, root move first, to play in one step.
+    // onBest gets the engine's top column, or null when there is nothing to mark.
+    // onPlayLine gets a whole continuation, root move first.
     constructor(onToggle, onPlay, onBest = () => {}, onPlayLine = () => {}) {
         this.enabled = false;
         this.paused = false;
@@ -34,9 +30,7 @@ export class AnalysisPanel {
             this.status(this.paused ? 'Paused · last completed evaluation retained' : 'Starting engine…');
             this.tick();
         });
-        // The engine values every legal root move whatever this is set to, so the row
-        // count is a pure display choice. Re-rank what is already in hand instead of
-        // restarting the search and throwing away its table, depth and proof progress.
+        // Display only: the engine ranks every root move regardless.
         this.el('analysis-top').addEventListener('change', () => {
             if (this.data) this.render(this.data);
         });
@@ -45,17 +39,12 @@ export class AnalysisPanel {
             event.stopPropagation();
             this.showSettings(this.el('analysis-settings').classList.contains('hidden'));
         });
-        // The popover is a transient menu: anything outside it, or Escape, closes it.
         document.addEventListener('click', event => {
             if (!this.el('analysis-settings').contains(event.target)) this.showSettings(false);
         });
         document.addEventListener('keydown', event => {
             if (event.key === 'Escape') this.showSettings(false);
         });
-        // The lines are only rebuilt when the engine reports something new, so a change
-        // of column numbering has to redraw the ones already on screen itself. A search
-        // that has already finished never reports again, which is exactly when the
-        // stale numbers would otherwise sit there.
         onColumnNumberingChange(() => {
             if (!this.data) return;
             this.last = null;
@@ -87,9 +76,6 @@ export class AnalysisPanel {
         this.el('analysis-settings-btn').setAttribute('aria-expanded', String(open));
     }
 
-    // The panel owns the best move; the board decides where to draw it. Reported again
-    // whenever the indicator setting changes, so the toggle takes effect immediately
-    // rather than at the next completed iteration.
     setBest(move) {
         const best = Number.isInteger(move) ? move : null;
         if (best === this.bestMove) return;
@@ -132,8 +118,7 @@ export class AnalysisPanel {
         this.el('analysis-status').classList.toggle('thinking', thinking);
     }
 
-    // Starts, stops or restarts the engine to match the panel's state. Updates
-    // arrive as the engine completes iterations; nothing is polled.
+    // Starts, stops or restarts the engine to match the panel's state.
     tick() {
         const revision = this.revision;
         const wanted = this.enabled && !this.paused && !document.hidden;
@@ -156,7 +141,6 @@ export class AnalysisPanel {
         });
         job.revision = revision;
         this.job = job;
-        // Show that the search is running before its first depth completes.
         this.render(newAnalysisSnapshot(this.moves));
     }
 
@@ -179,9 +163,7 @@ export class AnalysisPanel {
         this.el('eval-bar').setAttribute('aria-valuetext', text);
     }
 
-    // The principal variation, as coloured spans rather than one flat string: the move
-    // numbers read as scaffolding, and each column is tinted with the piece colour of the
-    // side that plays it, so whose move it is can be seen without counting plies.
+    // The PV as spans, each column tinted for the side that plays it.
     pvNodes(row) {
         const frag = document.createDocumentFragment();
         if (!row.pv.length) {
@@ -192,8 +174,6 @@ export class AnalysisPanel {
             const ply = this.moves.length + i;
             const first = ply % 2 === 0;
             if (i > 0) frag.append(' ');
-            // Numbering leads every first-player move; a line starting mid-turn opens
-            // with an ellipsis instead so the ply count still lines up.
             const label = first ? `${Math.floor(ply / 2) + 1}. ` : i === 0 ? `${Math.floor(ply / 2) + 1}… ` : '';
             if (label) {
                 const number = document.createElement('span');
@@ -212,9 +192,6 @@ export class AnalysisPanel {
     render(data) {
         this.data = data;
         const terminal = data.type === 'terminal';
-        // Ranked rows are capped for display only. Slicing before the fingerprint means
-        // a change to the row count rebuilds the list on its own, and a poll that brings
-        // nothing new still costs nothing.
         const shown = data.moves.slice(0, Math.max(1, Number(this.el('analysis-top').value) || 3));
         const fingerprint = JSON.stringify([data.depth, shown, terminal, data.phase]);
         if (this.last !== fingerprint) {
@@ -238,8 +215,7 @@ export class AnalysisPanel {
                     : row.solved && row.score === 0 ? 'Proved draw; no mate distance'
                     : row.solved ? 'Proved outcome; exact mate distance not yet established'
                     : 'Heuristic evaluation in engine units';
-                // A fresh fragment per call: appending one empties it, and the line is
-                // shown twice (collapsed summary and expanded body).
+                // A fresh fragment per use: appending one empties it.
                 const line = () => this.pvNodes(row);
                 const preview = document.createElement('span');
                 preview.className = 'analysis-pv-summary';
@@ -254,8 +230,6 @@ export class AnalysisPanel {
                 play.title = 'Play this move on the shared board (replaces future history if reviewing)';
                 play.addEventListener('click', () => this.onPlay(row.move));
                 detail.append(summary, pv, play);
-                // A one-move line is exactly what the button above already does, so the
-                // second button only appears when there is actually a line to follow.
                 if (row.pv.length > 1) {
                     const playLine = document.createElement('button');
                     playLine.className = 'analysis-play analysis-play-line';

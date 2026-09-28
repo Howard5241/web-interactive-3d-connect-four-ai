@@ -26,7 +26,6 @@
 #analysis-settings-btn { padding: 4px 7px; font-size: 13px; line-height: 1; }
 #analysis-settings-btn[aria-expanded="true"] { background: #efb87c; color: #241c16; border-color: #efb87c; }
 
-/* Settings popover: anchored under the gear in the panel's top-right corner. */
 #analysis-settings {
     position: absolute; z-index: 6; top: 44px; right: 12px; width: 232px;
     box-sizing: border-box; padding: 10px 12px;
@@ -37,7 +36,7 @@
 .analysis-setting label:not(.switch) { color: #ddd5c9; }
 .analysis-setting select { background: #37342f; color: #e6e3df; border: 1px solid #514a42; border-radius: 5px; padding: 3px 6px; }
 .analysis-setting-note { margin: 0; color: #8f887f; font-size: 10px; line-height: 1.5; }
-/* The shared .switch (style.css) is sized for the main settings modal; shrink it here. */
+/* Smaller .switch than the settings modal's. */
 #analysis-settings .switch { width: 34px; height: 18px; }
 #analysis-settings .slider:before { height: 12px; width: 12px; left: 3px; bottom: 3px; }
 #analysis-settings input:checked + .slider:before { transform: translateX(16px); }
@@ -53,15 +52,11 @@
 .analysis-score.dark { background: #9c5a2a; color: #fff0e0; }
 .analysis-pv-summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font: 600 12px/1.4 ui-monospace, monospace; }
 .analysis-pv { padding: 6px 0 2px; color: #cdc4b9; font: 12px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; }
-/* Move numbers are scaffolding, so they recede; the columns themselves carry the piece
-   colour of the side to play (light orange first, darker orange second). */
 .analysis-pv-num { color: #8b8379; font-weight: 400; }
 .analysis-pv-move { color: #efb87c; }
 .analysis-pv-move.p2 { color: #c07f47; }
 .analysis-play { margin-top: 4px; font-size: 11px; padding: 3px 8px; }
-/* Appended siblings carry no whitespace text node between them. */
 .analysis-play + .analysis-play { margin-left: 6px; }
-/* The line button is the wider-reaching of the two, so it reads as the secondary one. */
 .analysis-play-line { background: #2c2a27; color: #cdc4b9; }
 .analysis-empty { color: #a59a8e; padding: 20px; font-size: 13px; line-height: 1.7; }
 .analysis-footer { display: flex; align-items: center; gap: 8px; padding: 7px 16px; border-top: 1px solid #ffffff12; background: #201f1d; font-size: 10px; color: #969088; line-height: 1.5; }

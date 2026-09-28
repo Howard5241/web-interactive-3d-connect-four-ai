@@ -1,5 +1,5 @@
-// The ResNet + MCTS opponent, running in this browser (see nnWorker.js). The worker
-// stays alive between moves so the network is only downloaded and compiled once.
+// The ResNet + MCTS opponent. The worker is created on the first AI move and kept, so the
+// network downloads once.
 import { MCTS_ARGS } from './nnMcts.js';
 
 let worker = null;
@@ -22,7 +22,6 @@ function spawn() {
             else job.resolve({ move: data.move, visits: data.visits });
         }
     };
-    // Only reachable if the worker script or ONNX Runtime fails to load.
     worker.onerror = event => {
         event.preventDefault();
         worker.terminate();
@@ -33,8 +32,7 @@ function spawn() {
     return worker;
 }
 
-// The column the AI plays after `moves`. `onStatus` hears 'loading' and then the
-// backend ('webgpu' or 'wasm'); `onProgress(done, total)` follows the search.
+// onStatus hears 'loading', then 'webgpu' or 'wasm'; onProgress(done, total) follows the search.
 export function aiMove(moves, { simulations = MCTS_ARGS.simulations, onStatus = () => {}, onProgress = () => {} } = {}) {
     const id = ++nextId;
     return new Promise((resolve, reject) => {
