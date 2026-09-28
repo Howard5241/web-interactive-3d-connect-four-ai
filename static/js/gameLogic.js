@@ -4,12 +4,11 @@ export class ConnectFour3D {
         this.cols = 4;
         this.depth = 4;
         this.gridShape = [this.depth, this.rows, this.cols];
-        this.numCells = this.depth * this.rows * this.cols; // 64
-        this.numColumns = this.rows * this.cols; // 16
-        this.numActions = this.rows * this.cols; // 16
+        this.numCells = this.depth * this.rows * this.cols;
+        this.numColumns = this.rows * this.cols;
+        this.numActions = this.rows * this.cols;
 
-        // _winningPatterns[i] is a bitmask; _winningLines[i] holds the same four cells as
-        // [z, y, x] coordinates, so a completed pattern can be traced back to the board.
+        // Bitmasks, and the same lines as [z, y, x] cells.
         const { patterns, lines } = this._generateWinningPatterns();
         this._winningPatterns = patterns;
         this._winningLines = lines;
@@ -44,7 +43,7 @@ export class ConnectFour3D {
     }
 
     getNextState(state, action) {
-        const nextState = JSON.parse(JSON.stringify(state)); // Deep copy
+        const nextState = structuredClone(state);
         const { row, col } = this._actionToCoords(action);
 
         let depth = -1;
@@ -60,17 +59,6 @@ export class ConnectFour3D {
         }
 
         return nextState;
-    }
-
-    checkWin(state) {
-        const lastPlayer = -this.getCurrentPlayer(state);
-        const playerBitboard = this._createBitboard(state, lastPlayer);
-        for (const pattern of this._winningPatterns) {
-            if ((playerBitboard & pattern) === pattern) {
-                return true;
-            }
-        }
-        return false;
     }
 
     checkGameOver(state) {
@@ -129,9 +117,7 @@ export class ConnectFour3D {
         return `${p1Hex} ${p2Hex}`;
     }
 
-    // Every four-in-a-row currently on the board, as
-    // [{ player, cells: [[z, y, x] x4] }]. A single move can complete more than one line,
-    // so all of them are returned.
+    // Every four-in-a-row on the board: [{ player, cells: [[z, y, x] x4] }].
     getWinningLines(state) {
         const found = [];
         const boards = [[1, this._createBitboard(state, 1)], [-1, this._createBitboard(state, -1)]];
@@ -140,21 +126,19 @@ export class ConnectFour3D {
             for (const [player, bitboard] of boards) {
                 if ((bitboard & pattern) === pattern) {
                     found.push({ player, cells: this._winningLines[i] });
-                    break;   // a cell cannot hold both players, so at most one can match
+                    break;
                 }
             }
         }
         return found;
     }
 
-    // The four-in-a-row running through two distinct cells, as [[z, y, x] x4] in order
-    // along the line, or null if no winning line contains both. Two distinct points fix a
-    // straight line, so there is never more than one answer.
+    // The four-in-a-row through two distinct cells, in order along the line, or null.
     findLineThrough(a, b) {
         if (!a || !b) return null;
         const holds = (cells, c) =>
             cells.some(([z, y, x]) => z === c[0] && y === c[1] && x === c[2]);
-        if (holds([a], b)) return null;   // the same cell twice names no line
+        if (holds([a], b)) return null;
         for (const cells of this._winningLines) {
             if (holds(cells, a) && holds(cells, b)) return cells;
         }
@@ -162,8 +146,7 @@ export class ConnectFour3D {
     }
 
     _generateWinningPatterns() {
-        // Keyed by bitmask so the same four cells reached from opposite directions collapse
-        // to one entry, exactly as the old Set did.
+        // Keyed by bitmask so a line found from both ends is stored once.
         const patterns = new Map();
         const directions = [
             [1, 0, 0], [0, 1, 0], [0, 0, 1],

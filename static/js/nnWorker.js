@@ -1,6 +1,3 @@
-// Runs the ResNet opponent off the main thread: the network (static/nn/model.onnx,
-// exported by tools/export_onnx.py) through ONNX Runtime Web, searched with nnMcts.js.
-//
 // Request:  { id, moves, simulations }
 // Replies:  { id, status }                  on first use: 'loading', then 'webgpu' or 'wasm'
 //           { id, progress: [done, total] }
@@ -12,7 +9,6 @@ const MODEL_URL = new URL('../nn/model.onnx', import.meta.url);
 
 let loading = null;
 
-// WebGPU when the browser has it, WebAssembly otherwise.
 async function load() {
     const model = new Uint8Array(await (await fetch(MODEL_URL)).arrayBuffer());
     let lastError = null;

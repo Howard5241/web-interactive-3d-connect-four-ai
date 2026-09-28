@@ -1,16 +1,6 @@
-"""Build the web-sized piece textures in static/textures/ from the 4k sources in textures/.
-
-The light pieces are glazed clay (clay_floor_001), the dark ones oak veneer
-(oak_veneer_01). The sources are 4k and total ~40 MB, which is absurd for beads a few
-dozen pixels across, so every map is resampled to 512 and re-encoded -- the whole set
-comes to ~250 KB.
-
-Run it after replacing a source map:
+"""textures/ (4k, ~40 MB) -> static/textures/ (512px, ~250 KB). Requires Pillow.
 
     python tools/build_textures.py
-
-Requires Pillow. The generated files are committed, so this is only needed when the
-sources or the settings below change.
 """
 import os
 
@@ -21,15 +11,8 @@ SRC = os.path.join(HERE, os.pardir, 'textures')
 DST = os.path.join(HERE, os.pardir, 'static', 'textures')
 SIZE = 512
 
-# The light pieces have to read as white. A material's colour can only ever *darken* its
-# albedo map -- the shader multiplies the two -- and clay_floor's albedo is a mid brown, so
-# no tint over a faithful downscale will ever produce a white piece. The clay albedo is
-# therefore remapped onto a narrow band of luminance just below white: the streaks, cracks
-# and trowel marks all survive as gentle shading, and the actual relief still comes from
-# the untouched normal and roughness maps.
-#
-# The oak albedo needs no such treatment: the dark pieces are darker than it is, and
-# darkening is what a tint does.
+# A tint can only darken its map and the clay albedo is mid brown, so the clay albedo is
+# remapped to a narrow band just below white; the oak albedo is only downscaled.
 PALE_BASE = 0.90        # mean output level, 0..1
 PALE_AMP = 0.055        # how far one standard deviation of the source moves it
 

@@ -116,11 +116,11 @@
                 <div class="setting-item">
                     <label for="column-numbering-toggle">Columns Start at 1</label>
                     <label class="switch">
-                        <input type="checkbox" id="column-numbering-toggle">
+                        <input type="checkbox" id="column-numbering-toggle" checked>
                         <span class="slider round"></span>
                     </label>
                 </div>
-                <p class="setting-note" id="column-numbering-note">Display only — the board labels, move history, log and analysis panel number the columns 0–15.</p>
+                <p class="setting-note" id="column-numbering-note">Display only — the board labels, move history, log and analysis panel number the columns 1–16.</p>
             </div>
         </div>
     </div>
@@ -184,7 +184,6 @@
         </footer>
     </aside>
 
-    <!-- Import Three.js and OrbitControls -->
     <script type="importmap">
         {
             "imports": {
@@ -193,9 +192,6 @@
             }
         }
     </script>
-
-    <!-- Our main game script -->
-    <script type="module" src="{{ url_for('static', filename='js/gameLogic.js') }}"></script>
     <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

@@ -1,20 +1,14 @@
-# Python virtual environment
 venv/
-/venv/
 __pycache__/
-
-# IDE and OS files
+node_modules/
 .vscode/
 .idea/
-*.DS_Store
-
-# Large model files (IMPORTANT!)
-# We will handle this with Git LFS later if needed, but we should ignore it by default.
-models/model_best.pth
-
-# Flask session files
-.webassets-cache/
+.DS_Store
 instance/
 
-# Self-play logs (optional, but good to ignore if they get large)
+# puzzle_stats.py reports
+puzzle_stats*.csv
+puzzle_stats.txt
+
+# training output
 self_play_logs/

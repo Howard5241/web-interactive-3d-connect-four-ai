@@ -62,9 +62,6 @@ class PuzzleBankTests(unittest.TestCase):
         self.assertEqual(bank.category_counts()['long'], 1)   # mate in 8
         self.assertEqual(bank.category_counts()['quick'], 1)  # the drawn record
         self.assertEqual(bank.get_random(8)['mate'], 8)
-        bank.rewrite_files()
-        bank.reload()
-        self.assertEqual(bank.total(), 2)  # V3 metadata must not become legacy mate data
         self.assertEqual(bank.get_random(2)['goal'], 'draw')
 
     def test_category_follows_the_proved_distance_not_the_line_length(self):

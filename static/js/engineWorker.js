@@ -1,15 +1,8 @@
-// Runs the V4 C++ engine (compiled to WebAssembly) off the main thread.
-//
-// Request:  { id, command: 'analyze', moves, top, depth, ms }
-//           { id, command: 'bestmove', moves, ms }
-// Replies:  { id, line }            one parsed NDJSON line from the engine
-//           { id, exit, error }     the command returned; error is the engine's stderr, if any
-//
-// A search is one synchronous call into the engine, so this worker cannot take a
-// second message mid-search. Cancelling means terminating the worker; see engine.js.
+// Request:  { id, command: 'analyze', moves, top, depth, ms } | { id, command: 'bestmove', moves, ms }
+// Replies:  { id, line } per NDJSON line, then { id, exit, error }
 import createEngine from '../engine/connect4_engine.js';
 
-let current = null;       // id of the command whose output the engine is printing
+let current = null;
 let stderr = [];
 const engine = createEngine({
     print: text => {
@@ -17,7 +10,7 @@ const engine = createEngine({
         try {
             line = JSON.parse(text);
         } catch {
-            return; // not protocol output
+            return;
         }
         postMessage({ id: current, line });
     },
