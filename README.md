@@ -2,7 +2,7 @@
 
 Connect Four on a 4x4x4 grid, played in the browser. A Flask backend serves a three.js
 board. There are two opponents, a ResNet + MCTS agent and the C++ minimax engine from
-`connect4-c++/`, and both run **in the browser**, along with analysis mode, the way
+[3d-connect-four-engine](https://github.com/Howard5241/3d-connect-four-engine), and both run **in the browser**, along with analysis mode, the way
 chess sites run their engine locally for self-analysis. There is also a puzzle mode backed by an engine-generated
 puzzle bank, and a shared-room mode so several browsers can look at and play the same
 board.
@@ -131,7 +131,8 @@ engine's scalar code). Each search allocates a 64 MiB table, so the tab uses aro
 To rebuild after changing the engine, install
 [Emscripten](https://emscripten.org/docs/getting_started/downloads.html) and run the
 engine repo's `./build.ps1 -Wasm -DeployWeb` (Windows) or
-`./build_wasm.sh <path-to-this-repo>` (Linux/macOS). Both copy the two files into
+`./build_wasm.sh <path-to-this-repo>` (Linux/macOS), with the engine checked out next to
+this repo. Both copy the two files into
 `static/engine/`. Flask serves `.wasm` as `application/wasm`, which browsers need to
 compile it while it downloads.
 
@@ -320,7 +321,7 @@ files are not rewritten or deleted by the background worker.
     ```
     bin/connect4_3D.exe genpuzzle 2 400 <outputDir> 30 26 28 2
     ```
-    The engine's own CLI defaults are 30-second batches and 2 seconds total per
+    The engine's own CLI defaults are 120-second batches and 20 seconds total per
     candidate including continuation; the app asks for more: 400 seeds, 180-second
     batches, 30 seconds per candidate and a 45-second distance allowance, with at
     least two playable solver moves, in one below-normal-priority Windows process.
@@ -335,9 +336,9 @@ files are not rewritten or deleted by the background worker.
     without `--apply`. Set longer batch and
     candidate budgets together when mining harder puzzles. Leaving puzzle mode kills
     the process immediately; a batch also has a five-second external timeout grace.
-    Build/deploy from the C++ folder with `build.ps1 -Tests -DeployWeb`; see the
-    sibling engine's [pipeline report](../connect4-c++/PUZZLES_V3.md) for guarantees
-    and measured throughput. Restart Flask after updating Python code.
+    Build/deploy from the engine repo with `build.ps1 -Tests -DeployWeb`; see its
+    [puzzle docs](https://github.com/Howard5241/3d-connect-four-engine/blob/main/docs/PUZZLES.md)
+    for guarantees and measured throughput. Restart Flask after updating Python code.
 *   **File puzzles.** "Load from File" accepts `.txt` puzzle files in either the 2-line
     (`history` / `solution`) or the engine's 3-line (`board code` / `history` / `solution`)
     format.
@@ -382,7 +383,7 @@ before they existed.
 *   Python 3.11 with `flask`. In this checkout the environment lives outside the repo at
     `..\venv` (see the top-level `CLAUDE.md`).
 *   `static/nn/model.onnx` - the exported network, committed with the app.
-*   `bin/connect4_3D.exe` - build it from `connect4-c++/`, or copy an existing build.
+*   `bin/connect4_3D.exe` - build it from [3d-connect-four-engine](https://github.com/Howard5241/3d-connect-four-engine), or copy an existing build.
 
 ### Start the server
 
@@ -404,7 +405,7 @@ checkpoint.
 ## Project structure
 
 ```
-/connect4-web-app/
+/3d-connect-four-website/
 ├── bin/
 │   └── connect4_3D.exe     # C++ engine, used here as the puzzle generator
 ├── models/
