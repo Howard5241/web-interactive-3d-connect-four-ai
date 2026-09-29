@@ -33,44 +33,36 @@
             <button id="ai-move-btn" disabled>AI Move</button>
             <button id="minimax-move-btn" disabled>Minimax Move</button>
             <button id="analysis-toggle" aria-pressed="false">⌕ Analysis</button>
-        </div>
-        
-        <hr class="separator">
-
-        <div id="puzzle-section">
-            <input type="file" id="puzzle-file-input" accept=".txt" style="display: none;">
             <button id="engine-puzzle-btn">🧩 Puzzle Mode</button>
-            <button id="upload-puzzle-btn">📂 Load from File</button>
+        </div>
 
-            <div id="engine-puzzle-setup" class="hidden">
-                <h3>Puzzle Mode</h3>
-                <p class="setup-label">Find the only winning or drawing move at every turn:</p>
-                <div id="category-selector">
-                    <button class="cat-btn selected" data-category="quick">Quick<span class="cat-sub">mate&nbsp;in&nbsp;1–3</span></button>
-                    <button class="cat-btn" data-category="medium">Medium<span class="cat-sub">mate&nbsp;in&nbsp;4–5</span></button>
-                    <button class="cat-btn" data-category="long">Long<span class="cat-sub">mate&nbsp;in&nbsp;6–11</span></button>
-                    <button class="cat-btn" data-category="endgame">Endgame<span class="cat-sub">mate&nbsp;in&nbsp;12+</span></button>
-                </div>
-                <div id="mate-count-hint" class="mate-count-hint"></div>
-                <div class="setup-actions">
-                    <button id="start-puzzle-btn">▶ Start Solving</button>
-                </div>
-                <button id="cancel-engine-setup-btn" class="link-btn">Cancel</button>
+        <div id="engine-puzzle-setup" class="hidden">
+            <h3>Puzzle Mode</h3>
+            <p class="setup-label">Find the only winning or drawing move at every turn:</p>
+            <div id="category-selector">
+                <button class="cat-btn selected" data-category="quick">Quick<span class="cat-sub">mate&nbsp;in&nbsp;1–3</span></button>
+                <button class="cat-btn" data-category="medium">Medium<span class="cat-sub">mate&nbsp;in&nbsp;4–5</span></button>
+                <button class="cat-btn" data-category="long">Long<span class="cat-sub">mate&nbsp;in&nbsp;6–11</span></button>
+                <button class="cat-btn" data-category="endgame">Endgame<span class="cat-sub">mate&nbsp;in&nbsp;12+</span></button>
             </div>
+            <div id="mate-count-hint" class="mate-count-hint"></div>
+            <div class="setup-actions">
+                <button id="start-puzzle-btn">▶ Start Solving</button>
+            </div>
+            <button id="cancel-engine-setup-btn" class="link-btn">Cancel</button>
+        </div>
 
-            <div id="puzzle-controls" class="hidden">
-                <div class="puzzle-info">
-                    <h3 id="puzzle-title">Puzzle Mode</h3>
-                    <span id="puzzle-status">1 / 1</span>
-                </div>
-                <div class="puzzle-nav">
-                    <button id="prev-puzzle-btn" title="Previous Puzzle">&lt;</button>
-                    <button id="reset-puzzle-btn" title="Reset Current Puzzle">↻</button>
-                    <button id="next-puzzle-btn" title="Next Puzzle">&gt;</button>
-                </div>
-                <button id="show-solution-btn">💡 Show Solution</button>
-                <button id="exit-puzzle-btn">Exit Puzzle Mode</button>
+        <div id="puzzle-controls" class="hidden">
+            <div class="puzzle-info">
+                <h3 id="puzzle-title">Puzzle Mode</h3>
+                <span id="puzzle-status"></span>
             </div>
+            <div class="puzzle-nav">
+                <button id="reset-puzzle-btn" title="Reset Current Puzzle">↻</button>
+                <button id="next-puzzle-btn" title="New puzzle">&gt;</button>
+            </div>
+            <button id="show-solution-btn">💡 Show Solution</button>
+            <button id="exit-puzzle-btn">Exit Puzzle Mode</button>
         </div>
     </div>
     <div id="settings-modal-overlay" class="hidden">

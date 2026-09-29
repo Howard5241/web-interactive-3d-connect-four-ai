@@ -1,4 +1,4 @@
-const REFRESH_MS = 5000;
+const REFRESH_MS = 15000;
 
 const nameInput = document.getElementById('player-name');
 const errorBox = document.getElementById('menu-error');
@@ -92,3 +92,6 @@ refreshRooms();
 setInterval(() => {
     if (!document.hidden) refreshRooms();
 }, REFRESH_MS);
+document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) refreshRooms();
+});

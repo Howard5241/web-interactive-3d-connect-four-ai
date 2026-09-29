@@ -86,11 +86,14 @@ export class RoomSync {
 
     async _connect() {
         if (this._stopped || !this.room) return;
-        const exists = await fetch(`/api/rooms/${this.room}`).then(r => r.status !== 404).catch(() => true);
-        if (!exists) {
-            this._stopped = true;
-            this.handlers.onMissing?.();
-            return;
+        // A failed WebSocket hides its status, so a missing room is told apart once, up front.
+        if (!this.meta) {
+            const exists = await fetch(`/api/rooms/${this.room}`).then(r => r.status !== 404).catch(() => true);
+            if (!exists) {
+                this._stopped = true;
+                this.handlers.onMissing?.();
+                return;
+            }
         }
 
         const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';

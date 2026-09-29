@@ -7,7 +7,7 @@ const game = new ConnectFour3D();
 export const NUM_COLUMNS = 16;
 export const NUM_CELLS = 64;
 const GRID_SIZE = 4;
-const MAX_PUZZLES = 400;
+const MAX_PUZZLES = 1;
 const MAX_LINES = 76;
 export const LOG_LIMIT = 200;
 export const LOG_TAIL_ON_JOIN = 12;
@@ -115,7 +115,7 @@ function cleanProgress(value) {
     if (value === null || value === undefined) return null;
     if (typeof value !== 'object') throw new Error('progress must be an object or null');
     return {
-        index: cleanInt(value.index ?? 0, 'progress index', 0, MAX_PUZZLES),
+        index: cleanInt(value.index ?? 0, 'progress index', 0, MAX_PUZZLES - 1),
         solution_index: cleanInt(value.solution_index ?? 0, 'progress solution_index', 0, NUM_CELLS),
         solved: !!value.solved,
     };
@@ -144,7 +144,7 @@ function cleanPuzzle(value) {
     });
 
     return {
-        source: value.source === 'engine' || value.source === 'file' ? value.source : null,
+        source: value.source === 'engine' ? 'engine' : null,
         puzzles,
         category: typeof value.category === 'string' ? value.category.slice(0, 32) : null,
     };
