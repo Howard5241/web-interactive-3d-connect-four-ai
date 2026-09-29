@@ -5,8 +5,9 @@ import {
 } from './roomCore.js';
 
 const IDLE_DELETE_MS = 14 * 24 * 3600 * 1000;
-const MAX_MESSAGE_BYTES = 64 * 1024;
-const LOBBY_REFRESH_MS = 2 * 60 * 1000;
+const MAX_MESSAGE_BYTES = 16 * 1024;
+const MAX_SOCKETS = 32;
+const LOBBY_REFRESH_MS = 5 * 60 * 1000;
 
 // One instance per room code. Sockets use the hibernation API, so an idle room costs
 // nothing; everything needed after waking is in storage or on the socket attachments.
@@ -28,16 +29,17 @@ export class Room extends DurableObject {
             this.meta = meta;
             this.data = newRoomData();
             await this.ctx.storage.put({ meta: this.meta, data: this.data });
-            await this.ctx.storage.setAlarm(Date.now() + IDLE_DELETE_MS);
+            await this.markEmpty();
             return Response.json(meta);
         }
         if (!this.meta) return new Response('Room not found', { status: 404 });
         if (url.pathname === '/meta') return Response.json(this.meta);
-        if (request.headers.get('Upgrade') === 'websocket') return this.connect(url);
+        if (request.headers.get('Upgrade') === 'websocket') return await this.connect(url);
         return new Response('Not found', { status: 404 });
     }
 
-    connect(url) {
+    async connect(url) {
+        if (this.sockets().length >= MAX_SOCKETS) return new Response('Room is full', { status: 503 });
         let clientId;
         try {
             clientId = cleanClientId(url.searchParams.get('client_id'));
@@ -76,6 +78,8 @@ export class Room extends DurableObject {
         });
         this.broadcastPresence();
         this.ctx.waitUntil(this.reportToLobby());
+        await this.ctx.storage.delete('emptySince');
+        await this.ctx.storage.setAlarm(Date.now() + this.heartbeatMs());
         return new Response(null, { status: 101, webSocket: browser });
     }
 
@@ -108,7 +112,6 @@ export class Room extends DurableObject {
             return;
         }
 
-        if (Date.now() - (this.lastReport || 0) > LOBBY_REFRESH_MS) this.ctx.waitUntil(this.reportToLobby());
         const entry = appendLog(d, msg.log, client);
         if (result.changed || entry) await this.save();
         this.send(ws, { t: 'ack', id: msg.id, ok: true, version: d.version });
@@ -147,11 +150,33 @@ export class Room extends DurableObject {
         }
         this.broadcastPresence();
         await this.reportToLobby();
-        if (!this.sockets().length) await this.ctx.storage.setAlarm(Date.now() + IDLE_DELETE_MS);
+        if (!this.sockets().length) await this.markEmpty();
     }
 
+    heartbeatMs() {
+        return this.meta?.visibility === 'public' ? LOBBY_REFRESH_MS : IDLE_DELETE_MS;
+    }
+
+    async markEmpty() {
+        await this.ctx.storage.put('emptySince', Date.now());
+        await this.ctx.storage.setAlarm(Date.now() + IDLE_DELETE_MS);
+    }
+
+    // While sockets are open this keeps a public room's lobby entry fresh; once the room
+    // has been empty for IDLE_DELETE_MS it deletes the room.
     async alarm() {
-        if (this.sockets().length) return;
+        if (this.sockets().length) {
+            await this.reportToLobby();
+            await this.ctx.storage.setAlarm(Date.now() + this.heartbeatMs());
+            return;
+        }
+        const emptySince = await this.ctx.storage.get('emptySince');
+        if (!emptySince || Date.now() - emptySince < IDLE_DELETE_MS) {
+            await this.reportToLobby();
+            if (!emptySince) await this.ctx.storage.put('emptySince', Date.now());
+            await this.ctx.storage.setAlarm((emptySince || Date.now()) + IDLE_DELETE_MS);
+            return;
+        }
         await this.ctx.storage.deleteAll();
         this.meta = null;
         this.data = null;
@@ -208,7 +233,6 @@ export class Room extends DurableObject {
 
     async reportToLobby() {
         if (this.meta?.visibility !== 'public') return;
-        this.lastReport = Date.now();
         const clients = this.clients();
         const seated = Object.values(this.data.seats).filter(id => id && clients.some(c => c.id === id));
         const lobby = this.env.LOBBY.get(this.env.LOBBY.idFromName('lobby'));

@@ -22,8 +22,7 @@ Durable Objects hold the rooms.
   Web Worker. `M<n>` is an exact mate in n winner moves, `≈M<n>` a proved but not yet
   shortest mate.
 * **Puzzles.** Every solver move is the only win (or the only draw). Categories group
-  by objective mate length: Quick 1–3, Medium 4–5, Long 6–11, Endgame 12+. `.txt`
-  puzzle files can also be loaded.
+  by objective mate length: Quick 1–3, Medium 4–5, Long 6–11, Endgame 12+.
 * **Board tools.** Hover preview, right-click planning ghosts, right-drag between two
   pieces to draw their four-in-a-row, arrow-key history, move-list paste, hex board
   code, occlusion outline and mask, and 1-based or 0-based column labels.

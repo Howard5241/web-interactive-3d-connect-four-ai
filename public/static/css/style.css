@@ -219,7 +219,7 @@ h1 {
     gap: 10px;
 }
 
-#new-game-btn, #ai-move-btn, #minimax-move-btn, #undo-btn {
+#new-game-btn, #ai-move-btn, #minimax-move-btn, #undo-btn, #engine-puzzle-btn {
     padding: 10px 20px;
     font-size: 1em;
     cursor: pointer;
@@ -231,11 +231,11 @@ h1 {
     transition: background-color 0.2s, opacity 0.2s;
 }
 
-#new-game-btn:hover, #ai-move-btn:hover:not(:disabled), #minimax-move-btn:hover:not(:disabled), #undo-btn:hover:not(:disabled) {
+#new-game-btn:hover, #ai-move-btn:hover:not(:disabled), #minimax-move-btn:hover:not(:disabled), #undo-btn:hover:not(:disabled), #engine-puzzle-btn:hover:not(:disabled) {
     background-color: #ffc14d;
 }
 
-#new-game-btn:disabled, #ai-move-btn:disabled, #minimax-move-btn:disabled, #undo-btn:disabled {
+#new-game-btn:disabled, #ai-move-btn:disabled, #minimax-move-btn:disabled, #undo-btn:disabled, #engine-puzzle-btn:disabled {
     background-color: #888;
     color: #ccc;
     cursor: not-allowed;
@@ -255,23 +255,15 @@ h1 {
 }
 
 /* Puzzle mode */
-.separator {
-    border: 0;
-    height: 1px;
-    background: #444;
-    margin: 15px 0;
-}
-
-#puzzle-section {
+#puzzle-controls {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 5px;
 }
 
-#upload-puzzle-btn, #exit-puzzle-btn {
+#exit-puzzle-btn, #show-solution-btn {
     width: 100%;
     padding: 8px;
-    background-color: #4a90e2;
     color: white;
     border: none;
     border-radius: 5px;
@@ -280,41 +272,18 @@ h1 {
     transition: background-color 0.2s;
 }
 
-#upload-puzzle-btn:hover, #exit-puzzle-btn:hover {
-    background-color: #357abd;
-}
-
 #exit-puzzle-btn {
     background-color: #e74c3c;
-    margin-top: 5px;
 }
 
 #exit-puzzle-btn:hover {
     background-color: #c0392b;
 }
 
-#engine-puzzle-btn, #show-solution-btn {
-    width: 100%;
-    padding: 8px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    font-weight: bold;
-    transition: background-color 0.2s;
-    color: white;
-}
-
-#engine-puzzle-btn {
-    background-color: #27ae60;
-}
-#engine-puzzle-btn:hover {
-    background-color: #219150;
-}
-
 #show-solution-btn {
     background-color: #8e44ad;
-    margin-top: 5px;
 }
+
 #show-solution-btn:hover {
     background-color: #7d3c98;
 }

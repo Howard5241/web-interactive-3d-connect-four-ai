@@ -22,6 +22,9 @@ let ghostPieces = [];        // right-click planning pieces
 let previewPiece = null;     // hover preview
 let previewKey = null;       // `${cell}|${player}` the preview was built for
 let isRequestInProgress = false;
+// The scene is drawn only when something changed; see animate().
+let needsRender = true;
+const requestRender = () => { needsRender = true; };
 
 // Piece colours tint the textures (the shader multiplies them), so a tint can only darken
 // its map. Ghost and outline colours are untextured.
@@ -170,7 +173,6 @@ let isPuzzleMode = false;
 let puzzles = [];
 let currentPuzzleIndex = 0;
 let currentPuzzleSolutionIndex = 0;
-let puzzleSource = null;     // 'file' | 'engine'
 let selectedCategory = 'quick';
 // Mirrors puzzle_bank.CATEGORIES; refreshed from puzzles.json.
 let CATEGORIES = [
@@ -245,9 +247,6 @@ function init() {
     COLUMN_NUMBERING_TOGGLE = document.getElementById('column-numbering-toggle');
     COLUMN_NUMBERING_NOTE = document.getElementById('column-numbering-note');
 
-    const PUZZLE_FILE_INPUT = document.getElementById('puzzle-file-input');
-    const UPLOAD_PUZZLE_BTN = document.getElementById('upload-puzzle-btn');
-    const PREV_PUZZLE_BTN = document.getElementById('prev-puzzle-btn');
     const NEXT_PUZZLE_BTN = document.getElementById('next-puzzle-btn');
     const RESET_PUZZLE_BTN = document.getElementById('reset-puzzle-btn');
     const EXIT_PUZZLE_BTN = document.getElementById('exit-puzzle-btn');
@@ -258,10 +257,7 @@ function init() {
     const START_PUZZLE_BTN = document.getElementById('start-puzzle-btn');
     const CATEGORY_SELECTOR = document.getElementById('category-selector');
 
-    UPLOAD_PUZZLE_BTN.addEventListener('click', () => PUZZLE_FILE_INPUT.click());
-    PUZZLE_FILE_INPUT.addEventListener('change', handlePuzzleFileUpload);
-    PREV_PUZZLE_BTN.addEventListener('click', handlePrevPuzzle);
-    NEXT_PUZZLE_BTN.addEventListener('click', handleNextPuzzle);
+    NEXT_PUZZLE_BTN.addEventListener('click', () => startEnginePuzzle(selectedCategory));
     RESET_PUZZLE_BTN.addEventListener('click', () => loadPuzzle(currentPuzzleIndex));
     EXIT_PUZZLE_BTN.addEventListener('click', exitPuzzleMode);
     SHOW_SOLUTION_BTN.addEventListener('click', showSolution);
@@ -541,6 +537,7 @@ function drawCornerLabels() {
 }
 
 function redrawCornerLabels() {
+    requestRender();
     for (const sprite of cornerLabels) {
         scene.remove(sprite);
         sprite.material.map.dispose();
@@ -551,6 +548,7 @@ function redrawCornerLabels() {
 }
 
 function clearGhostPieces() {
+    requestRender();
     ghostPieces.forEach(p => scene.remove(p));
     ghostPieces = [];
 }
@@ -574,6 +572,7 @@ function createClickTargets() {
 let outlineGeo = null;   // shared by the current outline rings
 
 function clearPieces() {
+    requestRender();
     for (const piece of pieces) {
         scene.remove(piece);
         piece.material.dispose();
@@ -795,6 +794,7 @@ function pieceReach() {
 }
 
 function disposeMeshes(meshes) {
+    requestRender();
     meshes.forEach(m => {
         scene.remove(m);
         m.geometry.dispose();
@@ -967,7 +967,7 @@ function fullSharedState() {
 }
 
 function sharedPuzzleState() {
-    return { source: puzzleSource, puzzles, category: selectedCategory };
+    return { source: 'engine', puzzles, category: selectedCategory };
 }
 
 function sharedProgress() {
@@ -1028,7 +1028,6 @@ function applyRemoteState(state) {
             const progress = state.progress || {};
             if (!isPuzzleMode) enterPuzzleMode();   // resets currentPuzzleIndex, so go first
             puzzles = Array.isArray(p.puzzles) ? p.puzzles : [];
-            puzzleSource = p.source || null;
             if (p.category) selectedCategory = p.category;
             currentPuzzleIndex = progress.index || 0;
             currentPuzzleSolutionIndex = progress.solution_index || 0;
@@ -1199,9 +1198,16 @@ function renderRemoteLog(entries) {
         const said = document.createElement('span');
         setColumnText(said, e.text);
         line.append(who, said);
-        LOG_BOX.appendChild(line);
-        LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
+        appendLogLine(line);
     });
+}
+
+const LOG_LINES = 200;
+
+function appendLogLine(line) {
+    LOG_BOX.appendChild(line);
+    while (LOG_BOX.childElementCount > LOG_LINES) LOG_BOX.firstElementChild.remove();
+    LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
 }
 
 
@@ -1213,9 +1219,7 @@ function logMessage(message) {
 
     const logEntry = document.createElement('p');
     setColumnText(logEntry, `> ${message}`);
-    LOG_BOX.appendChild(logEntry);
-
-    LOG_BOX.scrollTop = LOG_BOX.scrollHeight;
+    appendLogLine(logEntry);
 }
 
 function setButtonsDisabled(state) {
@@ -1563,6 +1567,7 @@ function onWindowResize() {
     camera.aspect = container.clientWidth / container.clientHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(container.clientWidth, container.clientHeight);
+    requestRender();
 }
 
 // --- POINTER PICKING ---
@@ -1682,6 +1687,7 @@ function updateLineDragPreview(event) {
         renderOrder: 1400,
     });
     scene.add(mesh);
+    requestRender();
     lineDragPreview = { key, mesh };
 }
 
@@ -1697,6 +1703,7 @@ function handleGhostMove(column) {
     const piece = createGhostMesh(game.getCurrentPlayer(tempState), landingPosition);
     scene.add(piece);
     ghostPieces.push(piece);
+    requestRender();
 
     pushShared({ ghosts: ghostCells() });
 }
@@ -1730,6 +1737,7 @@ function onMouseMove(event) {
 
 function clearPreview() {
     if (!previewPiece) return;
+    requestRender();
     scene.remove(previewPiece);
     previewPiece.material.dispose();
     previewPiece = null;
@@ -1757,6 +1765,7 @@ function showPreview(column) {
     }));
     previewPiece.position.set(col, 3 - depth, row);
     scene.add(previewPiece);
+    requestRender();
     previewKey = key;
 }
 
@@ -1801,8 +1810,9 @@ function updateBestMoveIndicator() {
     }
 
     if (!bestMoveCell || bestMovePresence <= 0.001) {
-        if (bestMoveMesh) bestMoveMesh.visible = false;
-        return;
+        if (!bestMoveMesh?.visible) return false;
+        bestMoveMesh.visible = false;
+        return true;
     }
 
     if (!bestMoveMesh) {
@@ -1831,15 +1841,25 @@ function updateBestMoveIndicator() {
     bestMoveMesh.material.opacity = eased * (BEST_MOVE_MIN_OPACITY + (BEST_MOVE_MAX_OPACITY - BEST_MOVE_MIN_OPACITY) * breath);
     bestMoveMesh.scale.setScalar(0.4 * gameSettings.pieceSize * BEST_MOVE_SCALE * (1 + 0.04 * breath));
     bestMoveMesh.visible = true;
+    return true;
 }
 
 function animate() {
     requestAnimationFrame(animate);
+    const dropping = activeDrops.length > 0;
     updateDrops();
-    updateBestMoveIndicator();
-    updateOcclusionOverlays();
-    controls.update();
-    renderer.render(scene, camera);
+    const moved = controls.update();
+    const beadShown = updateBestMoveIndicator();
+    const changed = dropping || moved || needsRender;
+    if (changed || overlaysFading) {
+        overlaysFading = updateOcclusionOverlays();
+    } else {
+        _ocLastFrameTime = 0;
+    }
+    if (changed || beadShown || overlaysFading) {
+        needsRender = false;
+        renderer.render(scene, camera);
+    }
 }
 
 // --- OCCLUSION OVERLAYS ---
@@ -1849,6 +1869,7 @@ const OCCLUSION_COVERAGE_THRESHOLD = 0.6;
 const OCCLUSION_SAMPLES = 24;
 const OCCLUSION_FADE_MS = 220;
 let _ocLastFrameTime = 0;
+let overlaysFading = false;
 
 // Vogel spiral: evenly spread sample points on the unit disc.
 const occlusionSamplePoints = (() => {
@@ -1870,13 +1891,14 @@ const _ocDiscs = [];
 
 // Per frame: face the outline rings to the camera, estimate each piece's hidden fraction in
 // screen space (sample points against the discs of nearer pieces), and step the fades.
+// Returns true while a fade is moving.
 function updateOcclusionOverlays() {
     const now = performance.now();
     // Clamped so a backgrounded tab does not snap the fades.
     const elapsed = _ocLastFrameTime ? Math.min(now - _ocLastFrameTime, 100) : 0;
     _ocLastFrameTime = now;
 
-    if (pieceOverlays.length === 0) return;
+    if (pieceOverlays.length === 0) return false;
 
     _ocCamRight.setFromMatrixColumn(camera.matrixWorld, 0);
     const aspect = camera.aspect || 1;
@@ -1903,6 +1925,7 @@ function updateOcclusionOverlays() {
         disc.depth = depth;
     }
 
+    let changed = false;
     const needed = OCCLUSION_COVERAGE_THRESHOLD * OCCLUSION_SAMPLES;
     const fadeStep = OCCLUSION_FADE_MS > 0 ? elapsed / OCCLUSION_FADE_MS : 1;
 
@@ -1929,9 +1952,12 @@ function updateOcclusionOverlays() {
         let fade = overlay.fade;
         if (fade < target) fade = Math.min(target, fade + fadeStep);
         else if (fade > target) fade = Math.max(target, fade - fadeStep);
+        if (fade === overlay.fade) continue;
         overlay.fade = fade;
         applyOverlayFade(overlay);
+        changed = true;
     }
+    return changed;
 }
 
 function applyOverlayFade(overlay) {
@@ -1972,86 +1998,15 @@ function updateDrops() {
 
 // --- PUZZLE MODE ---
 
-function handlePuzzleFileUpload(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = function(e) {
-        const parsedPuzzles = parsePuzzleFile(e.target.result);
-        if (parsedPuzzles.length > 0) {
-            puzzles = parsedPuzzles;
-            puzzleSource = 'file';
-            enterPuzzleMode();
-            loadPuzzle(0);
-        } else {
-            alert("No valid puzzles found in the file.");
-        }
-    };
-    reader.readAsText(file);
-}
-
-function isBoardCodeLine(line) {
-    const toks = line.split(/\s+/).filter(t => t.length);
-    if (toks.length !== 2) return false;
-    if (!toks.every(t => /^[0-9a-fA-F]+$/.test(t))) return false;
-    return toks.some(t => t.length > 2);
-}
-
-function parseMoveLine(line) {
-    const toks = line.split(/[\s,]+/).filter(t => t.length);
-    const out = [];
-    for (const t of toks) {
-        const v = Number(t);
-        if (!Number.isInteger(v)) return null;
-        out.push(v);
-    }
-    return out;
-}
-
-// Accepts the 2-line (history / solution) and 3-line (board code / history / solution) formats.
-function parsePuzzleFile(text) {
-    const raw = text.split('\n').map(l => l.trim());
-    const parsed = [];
-    let i = 0;
-    const n = raw.length;
-    while (i < n) {
-        if (raw[i] === '') { i++; continue; }
-        let history, solution;
-        if (isBoardCodeLine(raw[i])) {
-            if (i + 2 >= n) break;
-            history = raw[i + 1] === '' ? [] : parseMoveLine(raw[i + 1]);
-            solution = parseMoveLine(raw[i + 2]);
-            i += 3;
-        } else {
-            if (i + 1 >= n) break;
-            history = parseMoveLine(raw[i]);
-            solution = parseMoveLine(raw[i + 1]);
-            i += 2;
-        }
-        if (history && solution && solution.length && solution.length % 2 === 1 &&
-            solution.every(m => m >= 0 && m < 16) && history.every(m => m >= 0 && m < 16)) {
-            parsed.push({ history, solution, mate: (solution.length + 1) / 2 });
-        }
-    }
-    return parsed;
-}
-
 function openEnginePuzzleSetup() {
     document.getElementById('engine-puzzle-setup').classList.remove('hidden');
     document.getElementById('button-container').classList.add('hidden');
-    document.getElementById('engine-puzzle-btn').classList.add('hidden');
-    document.getElementById('upload-puzzle-btn').classList.add('hidden');
     refreshMateCounts();
 }
 
 function closeEnginePuzzleSetup() {
     document.getElementById('engine-puzzle-setup').classList.add('hidden');
-    if (!isPuzzleMode) {
-        document.getElementById('button-container').classList.remove('hidden');
-        document.getElementById('engine-puzzle-btn').classList.remove('hidden');
-        document.getElementById('upload-puzzle-btn').classList.remove('hidden');
-    }
+    if (!isPuzzleMode) document.getElementById('button-container').classList.remove('hidden');
 }
 
 function renderMateHint(categoryCounts) {
@@ -2092,7 +2047,6 @@ async function startEnginePuzzle(category) {
             return;
         }
         puzzles = [puzzle];
-        puzzleSource = 'engine';
         selectedCategory = category;
         if (!isPuzzleMode) enterPuzzleMode();
         loadPuzzle(0);
@@ -2110,25 +2064,18 @@ function enterPuzzleMode() {
     document.getElementById('engine-puzzle-setup').classList.add('hidden');
     document.getElementById('puzzle-controls').classList.remove('hidden');
     document.getElementById('button-container').classList.add('hidden');
-    document.getElementById('engine-puzzle-btn').classList.add('hidden');
-    document.getElementById('upload-puzzle-btn').classList.add('hidden');
 }
 
 // Split from exitPuzzleMode so a remote exit does not start a new game here.
 function leavePuzzleUI() {
     isPuzzleMode = false;
     puzzles = [];
-    puzzleSource = null;
     currentPuzzleSolved = false;
 
     document.getElementById('puzzle-controls').classList.add('hidden');
     document.getElementById('engine-puzzle-setup').classList.add('hidden');
     document.getElementById('button-container').classList.remove('hidden');
     document.getElementById('move-history-container').classList.remove('hidden');
-    document.getElementById('engine-puzzle-btn').classList.remove('hidden');
-    document.getElementById('upload-puzzle-btn').classList.remove('hidden');
-
-    document.getElementById('puzzle-file-input').value = '';
 }
 
 function exitPuzzleMode() {
@@ -2136,42 +2083,11 @@ function exitPuzzleMode() {
     startNewGame();   // takes the whole room out of Puzzle Mode
 }
 
-function handlePrevPuzzle() {
-    if (puzzleSource === 'engine') return;
-    loadPuzzle(currentPuzzleIndex - 1);
-}
-
-function handleNextPuzzle() {
-    if (puzzleSource === 'engine') {
-        startEnginePuzzle(selectedCategory);
-    } else {
-        loadPuzzle(currentPuzzleIndex + 1);
-    }
-}
-
+// The mate distance is deliberately hidden.
 function updatePuzzleInfo() {
-    const title = document.getElementById('puzzle-title');
-    const status = document.getElementById('puzzle-status');
-    const prev = document.getElementById('prev-puzzle-btn');
-    const next = document.getElementById('next-puzzle-btn');
-
-    if (puzzleSource === 'engine') {
-        // The mate distance is deliberately hidden.
-        title.textContent = categoryLabel(selectedCategory);
-        status.textContent = currentPuzzleSolved ? 'Solved ✓'
-            : (puzzles[currentPuzzleIndex]?.goal === 'draw' ? 'Find the only draw' : 'Find the only win');
-        prev.disabled = true;
-        next.disabled = false;
-        prev.title = 'Not available for engine puzzles';
-        next.title = 'New puzzle';
-    } else {
-        title.textContent = 'Puzzle';
-        status.textContent = `${currentPuzzleIndex + 1} / ${puzzles.length}`;
-        prev.disabled = (currentPuzzleIndex === 0);
-        next.disabled = (currentPuzzleIndex === puzzles.length - 1);
-        prev.title = 'Previous Puzzle';
-        next.title = 'Next Puzzle';
-    }
+    document.getElementById('puzzle-title').textContent = categoryLabel(selectedCategory);
+    document.getElementById('puzzle-status').textContent = currentPuzzleSolved ? 'Solved ✓'
+        : (puzzles[currentPuzzleIndex]?.goal === 'draw' ? 'Find the only draw' : 'Find the only win');
 }
 
 function loadPuzzle(index) {
@@ -2192,9 +2108,7 @@ function loadPuzzle(index) {
     updatePuzzleInfo();
 
     const colorName = game.getCurrentPlayer(boardState) === 1 ? PLAYER1_NAME : PLAYER2_NAME;
-    const label = puzzleSource === 'engine'
-        ? categoryLabel(selectedCategory)
-        : `Puzzle ${index + 1}`;
+    const label = categoryLabel(selectedCategory);
     logMessage(`${label} — ${colorName} to move.`);
 
     // Unconditional, and the only push that carries the puzzle set.

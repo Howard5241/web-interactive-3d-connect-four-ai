@@ -10,7 +10,9 @@ const MODEL_URL = new URL('../nn/model.onnx', import.meta.url);
 let loading = null;
 
 async function load() {
-    const model = new Uint8Array(await (await fetch(MODEL_URL)).arrayBuffer());
+    const res = await fetch(MODEL_URL);
+    if (!res.ok) throw new Error(`could not download the network (${res.status})`);
+    const model = new Uint8Array(await res.arrayBuffer());
     let lastError = null;
     for (const backend of ['webgpu', 'wasm']) {
         if (backend === 'webgpu' && !globalThis.navigator?.gpu) continue;

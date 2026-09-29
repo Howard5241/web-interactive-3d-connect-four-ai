@@ -3,9 +3,11 @@ import { ROOM_CODE_RE, cleanName, randomCode } from './roomCore.js';
 export { Room } from './room.js';
 export { Lobby } from './lobby.js';
 
-const ISOLATION_HEADERS = {
+const PAGE_HEADERS = {
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Embedder-Policy': 'require-corp',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': "frame-ancestors 'none'",
 };
 const MODEL_PATH = '/static/nn/model.onnx';
 const MODEL_KEY = 'model.onnx';
@@ -17,6 +19,13 @@ function withHeaders(response, headers) {
 }
 
 const error = (message, status) => Response.json({ error: message }, { status });
+
+// Browsers always send Origin on POST and WebSocket requests, so this stops other sites
+// from creating rooms or joining them from their visitors' browsers.
+function fromOtherSite(request, url) {
+    const origin = request.headers.get('Origin');
+    return origin !== null && origin !== url.origin;
+}
 
 function roomStub(env, code) {
     return env.ROOMS.get(env.ROOMS.idFromName(code));
@@ -48,6 +57,7 @@ async function createRoom(request, env) {
 async function handleApi(request, env, url) {
     const parts = url.pathname.split('/').filter(Boolean);   // ['api', 'rooms', code?, 'ws'?]
     if (parts[1] !== 'rooms') return error('Not found', 404);
+    if (request.method !== 'GET' && fromOtherSite(request, url)) return error('Forbidden', 403);
 
     if (parts.length === 2) {
         if (request.method === 'POST') return createRoom(request, env);
@@ -68,6 +78,7 @@ async function handleApi(request, env, url) {
     }
     if (parts.length === 4 && parts[3] === 'ws') {
         if (request.headers.get('Upgrade') !== 'websocket') return error('Expected a WebSocket', 426);
+        if (fromOtherSite(request, url)) return error('Forbidden', 403);
         return stub.fetch(request);
     }
     return error('Not found', 404);
@@ -79,7 +90,7 @@ async function serveModel(request, env) {
         onlyIf: request.headers,
     });
     if (!object) return new Response('Model not uploaded', { status: 404 });
-    const headers = new Headers(ISOLATION_HEADERS);
+    const headers = new Headers(PAGE_HEADERS);
     object.writeHttpMetadata(headers);
     headers.set('ETag', object.httpEtag);
     headers.set('Cache-Control', 'public, max-age=86400');
@@ -96,7 +107,7 @@ export default {
         if (url.pathname === MODEL_PATH) return serveModel(request, env);
         if (/^\/r\/[A-Za-z0-9]+\/?$/.test(url.pathname)) {
             const page = await env.ASSETS.fetch(new URL('/room', url));
-            return withHeaders(page, ISOLATION_HEADERS);
+            return withHeaders(page, PAGE_HEADERS);
         }
         return env.ASSETS.fetch(request);
     },
