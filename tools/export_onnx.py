@@ -1,4 +1,4 @@
-"""models/model_best.pth -> static/nn/model.onnx for the browser AI. Requires torch and onnx.
+"""models/model_best.pth -> public/static/nn/model.onnx for the browser AI. Requires torch and onnx.
 
     python tools/export_onnx.py
 """
@@ -16,7 +16,7 @@ from ai_agent import ResNet3D  # noqa: E402
 from game_logic import ConnectFour3D  # noqa: E402
 
 SRC = os.path.join(ROOT, 'models', 'model_best.pth')
-DST = os.path.join(ROOT, 'static', 'nn', 'model.onnx')
+DST = os.path.join(ROOT, 'public', 'static', 'nn', 'model.onnx')
 
 
 def load_state_dict(path):

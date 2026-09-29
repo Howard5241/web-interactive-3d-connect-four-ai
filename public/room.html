@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>3D Connect Four vs. AI</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/analysis.css') }}">
+    <title>3D Connect Four</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/analysis.css">
 </head>
 <body>
     <div id="info-panel">
@@ -14,6 +14,15 @@
             <button id="settings-btn">⚙️</button>
         </div>
         <div id="presence-panel">
+            <div id="room-bar">
+                <a href="/" id="menu-link" title="Back to the menu">← Menu</a>
+                <span id="room-name"></span>
+                <button id="copy-link-btn" title="Copy a link to this room">Copy link</button>
+            </div>
+            <div id="seats">
+                <button class="seat" data-seat="1"><span class="seat-color seat-light"></span><span class="seat-label">Light orange</span><span class="seat-holder">Open</span></button>
+                <button class="seat" data-seat="-1"><span class="seat-color seat-dark"></span><span class="seat-label">Dark orange</span><span class="seat-holder">Open</span></button>
+            </div>
             <div id="presence-summary">Connecting…</div>
             <div id="viewer-list"></div>
         </div>
@@ -45,9 +54,7 @@
                 <div id="mate-count-hint" class="mate-count-hint"></div>
                 <div class="setup-actions">
                     <button id="start-puzzle-btn">▶ Start Solving</button>
-                    <button id="generate-puzzle-btn" title="Pause or resume the background generator">⏸ Pause generating</button>
                 </div>
-                <div id="generate-status" class="generate-status"></div>
                 <button id="cancel-engine-setup-btn" class="link-btn">Cancel</button>
             </div>
 
@@ -63,7 +70,6 @@
                 </div>
                 <button id="show-solution-btn">💡 Show Solution</button>
                 <button id="exit-puzzle-btn">Exit Puzzle Mode</button>
-                <div id="puzzle-gen-indicator" class="generate-status"></div>
             </div>
         </div>
     </div>
@@ -192,6 +198,6 @@
             }
         }
     </script>
-    <script type="module" src="{{ url_for('static', filename='js/main.js') }}"></script>
+    <script type="module" src="/static/js/main.js"></script>
 </body>
 </html>

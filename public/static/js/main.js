@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { ConnectFour3D } from './gameLogic.js';
 import { RoomSync } from './sync.js';
+import { bankSummary, randomPuzzle } from './puzzleBank.js';
 import { AnalysisPanel } from './analysis.js';
 import { bestMove } from './engine.js';
 import { aiMove } from './nnAgent.js';
@@ -171,7 +172,7 @@ let currentPuzzleIndex = 0;
 let currentPuzzleSolutionIndex = 0;
 let puzzleSource = null;     // 'file' | 'engine'
 let selectedCategory = 'quick';
-// Mirrors puzzle_bank.CATEGORIES; refreshed from the server.
+// Mirrors puzzle_bank.CATEGORIES; refreshed from puzzles.json.
 let CATEGORIES = [
     { key: 'quick',   label: 'Quick puzzle',  range_label: '1–3 moves to mate',  min: 1,  max: 3 },
     { key: 'medium',  label: 'Medium puzzle', range_label: '4–5 moves to mate',  min: 4,  max: 5 },
@@ -180,8 +181,6 @@ let CATEGORIES = [
 ];
 const categoryLabel = (key) => (CATEGORIES.find(c => c.key === key) || {}).label || key;
 let currentPuzzleSolved = false;
-let generationPollTimer = null;
-let generationRunning = false;
 let lastCategoryCounts = {};
 
 async function loadPieceModel(url) {
@@ -257,7 +256,6 @@ function init() {
     const ENGINE_PUZZLE_BTN = document.getElementById('engine-puzzle-btn');
     const CANCEL_ENGINE_SETUP_BTN = document.getElementById('cancel-engine-setup-btn');
     const START_PUZZLE_BTN = document.getElementById('start-puzzle-btn');
-    const GENERATE_PUZZLE_BTN = document.getElementById('generate-puzzle-btn');
     const CATEGORY_SELECTOR = document.getElementById('category-selector');
 
     UPLOAD_PUZZLE_BTN.addEventListener('click', () => PUZZLE_FILE_INPUT.click());
@@ -271,7 +269,6 @@ function init() {
     ENGINE_PUZZLE_BTN.addEventListener('click', openEnginePuzzleSetup);
     CANCEL_ENGINE_SETUP_BTN.addEventListener('click', closeEnginePuzzleSetup);
     START_PUZZLE_BTN.addEventListener('click', () => startEnginePuzzle(selectedCategory));
-    GENERATE_PUZZLE_BTN.addEventListener('click', toggleGeneration);
     CATEGORY_SELECTOR.querySelectorAll('.cat-btn').forEach(btn => {
         btn.addEventListener('click', () => selectCategory(btn.dataset.category));
     });
@@ -883,8 +880,78 @@ function initSync() {
         onPresence: renderPresence,
         onLog: renderRemoteLog,
         onConnection: renderConnection,
+        onMeta: renderRoomMeta,
+        onRejected: (error) => logMessage(error),
+        onMissing: showRoomMissing,
     });
+    document.querySelectorAll('.seat').forEach(btn => {
+        btn.addEventListener('click', () => toggleSeat(Number(btn.dataset.seat)));
+    });
+    document.getElementById('copy-link-btn').addEventListener('click', copyRoomLink);
+    if (!sync.room) {
+        showRoomMissing();
+        return;
+    }
     sync.start();
+}
+
+function renderRoomMeta(meta) {
+    const label = document.getElementById('room-name');
+    label.textContent = `${meta.name} · ${meta.code}`;
+    label.title = `${meta.visibility === 'private' ? 'Private' : 'Public'} room ${meta.code}`;
+    document.title = `${meta.name} · 3D Connect Four`;
+}
+
+function showRoomMissing() {
+    if (document.getElementById('room-missing')) return;
+    const box = document.createElement('div');
+    box.id = 'room-missing';
+    const text = document.createElement('p');
+    text.textContent = 'This room does not exist.';
+    const link = document.createElement('a');
+    link.href = '/';
+    link.textContent = 'Back to the menu';
+    box.append(text, link);
+    document.body.appendChild(box);
+}
+
+async function copyRoomLink() {
+    const btn = document.getElementById('copy-link-btn');
+    try {
+        await navigator.clipboard.writeText(location.origin + location.pathname);
+        btn.textContent = 'Copied';
+    } catch (e) {
+        btn.textContent = 'Copy failed';
+    }
+    setTimeout(() => { btn.textContent = 'Copy link'; }, 1500);
+}
+
+async function toggleSeat(player) {
+    const result = await sync.takeSeat(sync.mySeat() === player ? null : player);
+    if (!result.ok && result.error) logMessage(result.error);
+}
+
+function renderSeats(seats) {
+    document.querySelectorAll('.seat').forEach(btn => {
+        const holderId = seats[btn.dataset.seat];
+        const holder = viewers.find(v => v.id === holderId);
+        const mine = holderId === sync.clientId;
+        const label = btn.querySelector('.seat-holder');
+        label.classList.toggle('away', !!holderId && !holder);
+        if (mine) label.textContent = 'You · stand up';
+        else if (holder) label.textContent = holder.name;
+        else if (holderId) label.textContent = 'Away · take seat';
+        else label.textContent = 'Open · sit here';
+        btn.classList.toggle('mine', mine);
+        btn.disabled = !!holder && !mine;
+    });
+}
+
+// Why this viewer cannot play `player` right now, or null.
+function seatBlock(player) {
+    if (!sync || sync.canPlay(player)) return null;
+    if (sync.mySeat() === null) return 'You are watching. Take an open seat to play.';
+    return "It's your opponent's move.";
 }
 
 function fullSharedState() {
@@ -919,6 +986,9 @@ async function pushShared(patch, { expect = false, log = null } = {}) {
     if (result.conflict) {
         // sync already applied the state we missed.
         logMessage('Another viewer moved first — the board has been resynced.');
+    }
+    if (result.error === 'offline' || result.error === 'disconnected') {
+        logMessage('Not connected to the room, so that change was not shared.');
     }
     return result;
 }
@@ -1082,8 +1152,9 @@ function refreshControls() {
 
 // --- PRESENCE & SHARED LOG ---
 
-function renderPresence(clients) {
+function renderPresence(clients, seats) {
     viewers = clients;
+    renderSeats(seats);
     const list = document.getElementById('viewer-list');
     if (!list) return;
     list.innerHTML = '';
@@ -1112,10 +1183,7 @@ function renderConnection(status) {
     }
     label.classList.remove('offline');
     const n = viewers.length || 1;
-    const room = sync && sync.room !== 'main' ? ` · room “${sync.room}”` : '';
-    label.textContent = n === 1
-        ? `Shared board · 1 viewer${room}`
-        : `Shared board · ${n} viewers${room}`;
+    label.textContent = n === 1 ? '1 viewer' : `${n} viewers`;
 }
 
 function renderRemoteLog(entries) {
@@ -1265,6 +1333,12 @@ async function handlePlayerMove(column) {
         return;
     }
 
+    const blocked = !analysis?.enabled && seatBlock(game.getCurrentPlayer(boardState));
+    if (blocked) {
+        logMessage(blocked);
+        return;
+    }
+
     setButtonsDisabled(true);
     logMessage('Processing your move...');
 
@@ -1278,9 +1352,10 @@ async function handlePlayerMove(column) {
     if (!pushed.ok) return;
 
     if (!checkGameOver('You win!', 'Your turn! Click a column or let the AI play.')) {
-        if (gameSettings.autoAIMove && !analysis?.enabled) {
+        const autoReply = !analysis?.enabled && !seatBlock(game.getCurrentPlayer(boardState));
+        if (gameSettings.autoAIMove && autoReply) {
             setTimeout(() => requestAIMove(), 100);
-        } else if (gameSettings.autoMinimaxMove && !analysis?.enabled) {
+        } else if (gameSettings.autoMinimaxMove && autoReply) {
             setTimeout(() => requestMinimaxMove(), 100);
         }
     }
@@ -1371,6 +1446,12 @@ async function requestEngineMove(kind) {
 
     if (engineBusyElsewhere()) {
         logMessage('Another viewer already has the engine running.');
+        return;
+    }
+
+    const blocked = seatBlock(game.getCurrentPlayer(boardState));
+    if (blocked) {
+        logMessage(blocked);
         return;
     }
 
@@ -1962,14 +2043,11 @@ function openEnginePuzzleSetup() {
     document.getElementById('engine-puzzle-btn').classList.add('hidden');
     document.getElementById('upload-puzzle-btn').classList.add('hidden');
     refreshMateCounts();
-    // The engine generates puzzles in the background while the puzzle UI is open.
-    startBackgroundGeneration();
 }
 
 function closeEnginePuzzleSetup() {
     document.getElementById('engine-puzzle-setup').classList.add('hidden');
     if (!isPuzzleMode) {
-        stopBackgroundGeneration();
         document.getElementById('button-container').classList.remove('hidden');
         document.getElementById('engine-puzzle-btn').classList.remove('hidden');
         document.getElementById('upload-puzzle-btn').classList.remove('hidden');
@@ -1996,10 +2074,9 @@ function selectCategory(key) {
 
 async function refreshMateCounts() {
     try {
-        const res = await fetch('/api/puzzle/counts');
-        const data = await res.json();
-        if (Array.isArray(data.categories) && data.categories.length) CATEGORIES = data.categories;
-        renderMateHint(data.category_counts || {});
+        const { categories, counts } = await bankSummary();
+        if (categories.length) CATEGORIES = categories;
+        renderMateHint(counts);
     } catch (e) { /* non-critical */ }
 }
 
@@ -2007,89 +2084,23 @@ async function startEnginePuzzle(category) {
     if (isRequestInProgress) return;
     isRequestInProgress = true;
     const label = categoryLabel(category);
-    logMessage(`Fetching a ${label.toLowerCase()} from the engine...`);
+    logMessage(`Picking a ${label.toLowerCase()}...`);
     try {
-        const res = await fetch(`/api/puzzle?category=${encodeURIComponent(category)}`);
-        const data = await res.json();
-        if (data.category_counts) renderMateHint(data.category_counts);
-        if (!res.ok || data.empty) {
-            logMessage(data.error || 'No puzzle available.');
-            document.getElementById('generate-status').textContent =
-                `No ${label} puzzles yet — the engine is generating; try again shortly.`;
+        const puzzle = await randomPuzzle(category);
+        if (!puzzle) {
+            logMessage(`No ${label.toLowerCase()} puzzles in the bank.`);
             return;
         }
-        puzzles = [{ history: data.history, solution: data.solution, mate: data.mate,
-                 steps: data.steps, goal: data.goal, id: data.id }];
+        puzzles = [puzzle];
         puzzleSource = 'engine';
         selectedCategory = category;
         if (!isPuzzleMode) enterPuzzleMode();
         loadPuzzle(0);
     } catch (e) {
-        logMessage('Error fetching puzzle: ' + e.message);
+        logMessage('Error loading puzzles: ' + e.message);
     } finally {
         isRequestInProgress = false;
     }
-}
-
-function updateGenerateButton() {
-    document.getElementById('generate-puzzle-btn').textContent = generationRunning ? '⏸ Pause generating' : '▶ Resume generating';
-}
-
-function toggleGeneration() {
-    if (generationRunning) stopBackgroundGeneration();
-    else startBackgroundGeneration();
-}
-
-async function startBackgroundGeneration() {
-    generationRunning = true;
-    updateGenerateButton();
-    startGenerationPolling();
-    try {
-        await fetch('/api/puzzle/generate/start', { method: 'POST' });
-    } catch (e) { /* ignore */ }
-}
-
-async function stopBackgroundGeneration() {
-    stopGenerationPolling();
-    generationRunning = false;
-    updateGenerateButton();
-    try {
-        const response = await fetch('/api/puzzle/generate/stop', { method: 'POST' });
-        const data = await response.json();
-        if (!generationRunning) setGenerationStatus(data.status?.message || 'Generation paused.');
-    } catch (e) { /* ignore */ }
-}
-
-function startGenerationPolling() {
-    stopGenerationPolling();
-    pollGenerationStatus();
-    generationPollTimer = setInterval(pollGenerationStatus, 2500);
-}
-
-function stopGenerationPolling() {
-    if (generationPollTimer) {
-        clearInterval(generationPollTimer);
-        generationPollTimer = null;
-    }
-}
-
-async function pollGenerationStatus() {
-    try {
-        const res = await fetch('/api/puzzle/generate/status');
-        const data = await res.json();
-        const st = data.status || {};
-        generationRunning = !!st.running;
-        updateGenerateButton();
-        renderMateHint(st.category_counts);
-        setGenerationStatus(st.running
-            ? `⚙️ Engine generating in the background… +${st.session_added || 0} puzzles this session`
-            : (st.message || 'Generation paused.'));
-    } catch (e) { /* keep polling */ }
-}
-
-function setGenerationStatus(message) {
-    document.getElementById('generate-status').textContent = message;
-    document.getElementById('puzzle-gen-indicator').textContent = message;
 }
 
 function enterPuzzleMode() {
@@ -2109,7 +2120,6 @@ function leavePuzzleUI() {
     puzzles = [];
     puzzleSource = null;
     currentPuzzleSolved = false;
-    stopBackgroundGeneration();
 
     document.getElementById('puzzle-controls').classList.add('hidden');
     document.getElementById('engine-puzzle-setup').classList.add('hidden');

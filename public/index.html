@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Connect Four</title>
+    <link rel="stylesheet" href="/static/css/menu.css">
+</head>
+<body>
+    <main>
+        <h1>3D Connect Four</h1>
+        <p class="tagline">Four in a row on a 4×4×4 board. Play a friend, the AI, or solve puzzles.</p>
+
+        <section class="card">
+            <label for="player-name">Your name</label>
+            <input id="player-name" maxlength="24" placeholder="Guest" autocomplete="nickname">
+        </section>
+
+        <section class="card">
+            <h2>Create a room</h2>
+            <input id="room-name" maxlength="24" placeholder="Room name (optional)">
+            <div class="visibility" role="radiogroup" aria-label="Who can find the room">
+                <label><input type="radio" name="visibility" value="public" checked> Public <span class="hint">listed below</span></label>
+                <label><input type="radio" name="visibility" value="private"> Private <span class="hint">link only</span></label>
+            </div>
+            <button id="create-btn" class="primary">Create room</button>
+        </section>
+
+        <section class="card">
+            <h2>Join with a code</h2>
+            <form id="join-form" class="row">
+                <input id="join-code" maxlength="64" placeholder="Code or room link" autocapitalize="off" spellcheck="false">
+                <button type="submit">Join</button>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>Public rooms</h2>
+            <ul id="room-list"><li class="empty">Loading…</li></ul>
+        </section>
+
+        <p id="menu-error" role="alert"></p>
+    </main>
+    <script type="module" src="/static/js/menu.js"></script>
+</body>
+</html>

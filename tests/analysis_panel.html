@@ -2,7 +2,7 @@
 <html lang="en">
 <meta charset="utf-8">
 <title>Analysis panel regression fixture</title>
-<link rel="stylesheet" href="../static/css/analysis.css">
+<link rel="stylesheet" href="../public/static/css/analysis.css">
 <style>body { background: #171c27; color: #eee; font: 16px system-ui; padding: 2rem; }
 #analysis-panel { position: static; width: 360px; } .hidden { display: none; }</style>
 <button id="analysis-toggle">Analysis</button>
@@ -19,7 +19,7 @@
 </section>
 <p id="test-result">Running browser regression checks…</p>
 <script type="module">
-import { AnalysisPanel } from '../static/js/analysis.js';
+import { AnalysisPanel } from '../public/static/js/analysis.js';
 const assert = (ok, message) => { if (!ok) throw new Error(message); };
 const panel = new AnalysisPanel(() => {}, () => {});
 // Isolated renderer test: no shared-room writes, engine worker, neural model or GPU.

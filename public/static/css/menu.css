@@ -1,0 +1,156 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+    background-color: #1a1a1a;
+    color: #f0f0f0;
+}
+
+main {
+    max-width: 440px;
+    margin: 0 auto;
+    padding: 40px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+h1 {
+    margin: 0;
+    color: #ffa500;
+    font-size: 2em;
+}
+
+h2 {
+    margin: 0 0 10px;
+    font-size: 1em;
+    color: #ddd;
+}
+
+.tagline {
+    margin: 0 0 6px;
+    color: #999;
+}
+
+.card {
+    background: #242424;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 14px;
+}
+
+.card > label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.85em;
+    color: #999;
+}
+
+input:not([type]), input[type="text"] {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 5px;
+    border: 1px solid #444;
+    background: #1a1a1a;
+    color: #f0f0f0;
+    font-size: 1em;
+}
+
+input:focus-visible, button:focus-visible {
+    outline: 2px solid #ffa500;
+    outline-offset: 1px;
+}
+
+.visibility {
+    display: flex;
+    gap: 16px;
+    margin: 10px 0;
+    font-size: 0.95em;
+}
+
+.hint {
+    color: #888;
+    font-size: 0.85em;
+}
+
+button {
+    padding: 8px 14px;
+    border-radius: 5px;
+    border: 1px solid #555;
+    background: #333;
+    color: #f0f0f0;
+    font-size: 0.95em;
+    cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+    border-color: #ffa500;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+button.primary {
+    width: 100%;
+    background: #ffa500;
+    border-color: #ffa500;
+    color: #1a1a1a;
+    font-weight: bold;
+}
+
+button.primary:hover:not(:disabled) {
+    background: #ffb733;
+}
+
+.row {
+    display: flex;
+    gap: 8px;
+}
+
+#room-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+#room-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 0;
+    border-top: 1px solid #333;
+}
+
+#room-list li:first-child {
+    border-top: none;
+}
+
+#room-list .empty {
+    color: #888;
+    font-size: 0.9em;
+}
+
+.room-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.room-meta {
+    color: #888;
+    font-size: 0.85em;
+    white-space: nowrap;
+}
+
+#menu-error {
+    min-height: 1.2em;
+    margin: 0;
+    color: #ff8a80;
+}
