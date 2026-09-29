@@ -1,4 +1,4 @@
-"""textures/ (4k, ~40 MB) -> static/textures/ (512px, ~250 KB). Requires Pillow.
+"""textures/ (4k, ~40 MB) -> public/static/textures/ (512px, ~250 KB). Requires Pillow.
 
     python tools/build_textures.py
 """
@@ -8,7 +8,7 @@ from PIL import Image, ImageStat
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, os.pardir, 'textures')
-DST = os.path.join(HERE, os.pardir, 'static', 'textures')
+DST = os.path.join(HERE, os.pardir, 'public', 'static', 'textures')
 SIZE = 512
 
 # A tint can only darken its map and the clay albedo is mid brown, so the clay albedo is

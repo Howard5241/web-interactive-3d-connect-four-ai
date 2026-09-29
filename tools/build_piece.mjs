@@ -1,4 +1,4 @@
-// models/Piece.fbx -> static/models/piece.bin: the bead mesh baked, centred, scaled to a unit
+// models/Piece.fbx -> public/static/models/piece.bin: the bead mesh baked, centred, scaled to a unit
 // bounding sphere and simplified, so the browser loads ~150 KB instead of a 26 MB FBX.
 //
 //   npm i --no-save three@0.160.0 meshoptimizer && node tools/build_piece.mjs
@@ -15,7 +15,7 @@ import { MeshoptSimplifier } from 'meshoptimizer';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = path.join(ROOT, 'models', 'Piece.fbx');
-const DST = path.join(ROOT, 'static', 'models', 'piece.bin');
+const DST = path.join(ROOT, 'public', 'static', 'models', 'piece.bin');
 const KEEP = 0.1;
 
 // The FBX references its textures by absolute Windows path; only the geometry is wanted.

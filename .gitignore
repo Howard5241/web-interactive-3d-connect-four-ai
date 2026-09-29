@@ -12,3 +12,4 @@ puzzle_stats.txt
 
 # training output
 self_play_logs/
+.wrangler/

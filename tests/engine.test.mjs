@@ -1,11 +1,11 @@
 // Browser-engine tests: node --test tests/
 //
-// The first group drives static/js/engine.js against a fake Worker, the way the
+// The first group drives public/static/js/engine.js against a fake Worker, the way the
 // analysis panel and the minimax button use it. The second loads the real
-// WebAssembly engine (static/engine/) directly and checks what it computes.
+// WebAssembly engine (public/static/engine/) directly and checks what it computes.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import createEngine from '../static/engine/connect4_engine.js';
+import createEngine from '../public/static/engine/connect4_engine.js';
 
 // --- engine.js protocol, against a fake worker -------------------------------
 
@@ -30,7 +30,7 @@ globalThis.Worker = class {
     }
     terminate() { this.terminated = true; }
 };
-const { analyze, bestMove, applyAnalysisLine, newAnalysisSnapshot } = await import('../static/js/engine.js');
+const { analyze, bestMove, applyAnalysisLine, newAnalysisSnapshot } = await import('../public/static/js/engine.js');
 
 // Resolves with every snapshot the job published, once it stops running.
 function analyzeAll(moves) {

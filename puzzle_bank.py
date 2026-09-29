@@ -1,4 +1,5 @@
-"""Puzzle bank and bounded background generation (engine `genpuzzle`).
+"""Puzzle bank: parsing, deduplication and categories. tools/build_puzzles.py turns it into
+public/puzzles.json, which the site serves.
 
 Every recorded solver decision is the only win, or the only draw when everything else
 loses. Categories group by the objective mate length in solver moves (see mate_length),
@@ -10,13 +11,10 @@ versioned records in generated_v3.jsonl.
 import os
 import re
 import glob
-import time
 import random
 import hashlib
 import json
-import math
 import threading
-import subprocess
 
 _HEX_TOKEN = re.compile(r'^[0-9a-fA-F]+$')
 
@@ -258,155 +256,3 @@ class PuzzleBank:
             if key is not None:
                 out[key] += n
         return out
-
-
-class GenerationManager:
-    """One low-priority engine process in bounded, immediately stoppable batches."""
-
-    PIECE_RANGES = [(26, 28)]
-
-    def __init__(self, bank, exe_path, output_dir, seeds=400, batch_seconds: float = 120,
-                 candidate_seconds: float = 20, min_steps=2, distance_seconds: float = 30):
-        self.bank = bank
-        self.exe_path = exe_path
-        self.output_dir = output_dir
-        self.seeds = seeds
-        self.batch_seconds = batch_seconds
-        if (not math.isfinite(candidate_seconds) or not math.isfinite(batch_seconds)
-            or not 0 < candidate_seconds <= 120 or batch_seconds <= 0
-            or not 1 <= seeds <= 100000 or not 1 <= min_steps <= 32
-            or not math.isfinite(distance_seconds) or not 0 <= distance_seconds <= 120):
-            raise ValueError('Invalid generation time budget')
-        self.candidate_seconds = candidate_seconds
-        self.min_steps = min_steps
-        # Seconds per puzzle for the engine's distance step; 0 skips it.
-        self.distance_seconds = distance_seconds
-        self._control_lock = threading.Lock()  # serialize start/stop, not status reads
-        self._lock = threading.Lock()
-        self._proc = None                 # currently running engine subprocess (if any)
-        self._stop = threading.Event()
-        self._thread = None
-        self._status = {
-            'running': False, 'session_added': 0, 'batches': 0,
-            'message': 'idle', 'started_at': None,
-        }
-
-    def status(self):
-        with self._lock:
-            s = dict(self._status)
-        s['counts'] = self.bank.counts()
-        s['category_counts'] = self.bank.category_counts()
-        s['total'] = self.bank.total()
-        return s
-
-    def start(self):
-        """Begin continuous background generation. Idempotent while already running."""
-        with self._control_lock:
-            with self._lock:
-                running = self._status['running']
-            # status() takes _lock too.
-            if running:
-                return False, self.status()
-            prev = self._thread
-            if prev is not None and prev.is_alive():
-                prev.join(timeout=5)
-                if prev.is_alive():
-                    return False, self.status()  # never clear the old worker's stop event
-            self._stop.clear()
-            with self._lock:
-                self._status = {
-                    'running': True, 'session_added': 0, 'batches': 0,
-                    'message': 'Generating V3 puzzles (26–28 pieces)...',
-                    'started_at': time.time(),
-                }
-            self._thread = threading.Thread(target=self._loop, daemon=True)
-            self._thread.start()
-        return True, self.status()
-
-    def stop(self):
-        """Stop the loop and kill any in-flight batch immediately."""
-        with self._control_lock:
-            self._stop.set()
-            with self._lock:
-                proc = self._proc
-            if proc is not None:
-                try:
-                    proc.kill()
-                except OSError:
-                    pass
-            with self._lock:
-                self._status['running'] = False
-                self._status['message'] = 'Paused. +%d puzzles this session.' % self._status['session_added']
-        return self.status()
-
-    def _loop(self):
-        try:
-            while not self._stop.is_set():
-                before = self.bank.total()
-                with self._lock:
-                    idx = self._status['batches']
-                min_p, max_p = self.PIECE_RANGES[idx % len(self.PIECE_RANGES)]
-                self._run_batch(min_p, max_p)
-                self.bank.reload()  # keep complete records even after an explicit stop
-                if self._stop.is_set():
-                    break
-                added = max(0, self.bank.total() - before)
-                with self._lock:
-                    self._status['session_added'] += added
-                    self._status['batches'] += 1
-                    self._status['message'] = (
-                        'Generating in the background... +%d puzzles this session'
-                        % self._status['session_added'])
-                # The engine deduplicates before writing; no periodic bank rewrite.
-        except Exception as exc:  # report errors instead of a silent daemon crash
-            with self._lock:
-                self._status['message'] = 'Generation failed: %s' % exc
-        finally:
-            with self._lock:
-                self._status['running'] = False
-
-    def _run_batch(self, min_pieces=26, max_pieces=28):
-        if self._stop.is_set():
-            return
-        if not os.path.exists(self.exe_path):
-            self._stop.set()
-            with self._lock:
-                self._status['message'] = 'Engine executable not found: %s' % self.exe_path
-            return
-        try:
-            os.makedirs(self.output_dir, exist_ok=True)
-            proc = subprocess.Popen(
-                # Positional arguments, so the defaults before the distance allowance are
-                # restated. A fresh seed per batch, or every batch samples the same candidates.
-                [self.exe_path, 'genpuzzle', str(self.min_steps), str(self.seeds),
-                 os.path.abspath(self.output_dir), str(self.batch_seconds),
-                 str(min_pieces), str(max_pieces), str(self.candidate_seconds),
-                 str(random.randrange(1, 2 ** 32)), str(self.min_steps),
-                 str(self.distance_seconds)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                creationflags=getattr(subprocess, 'BELOW_NORMAL_PRIORITY_CLASS', 0),
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._stop.set()
-            with self._lock:
-                self._status['message'] = 'Generation failed: %s' % exc
-            return
-        with self._lock:
-            self._proc = proc
-        try:
-            # Closes the stop-before-publication race; communicate drains the pipe.
-            if self._stop.is_set():
-                proc.kill()
-            output, _ = proc.communicate(timeout=self.batch_seconds + 5)
-            if not self._stop.is_set():
-                if proc.returncode:
-                    raise RuntimeError('engine exit %s: %s' % (proc.returncode, output[-500:]))
-                with self._lock:
-                    self._status['last_batch'] = output[-2000:]
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            raise RuntimeError('engine exceeded its batch deadline') from None
-        finally:
-            with self._lock:
-                self._proc = None

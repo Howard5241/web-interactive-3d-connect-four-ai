@@ -6,11 +6,11 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ConnectFour3D } from '../static/js/gameLogic.js';
+import { ConnectFour3D } from '../public/static/js/gameLogic.js';
 import {
     bestAction, currentPlayer, encodeState, maskedPolicy, nextState, search,
     stateFromMoves, validMoves, valueAndTerminated,
-} from '../static/js/nnMcts.js';
+} from '../public/static/js/nnMcts.js';
 
 const game = new ConnectFour3D();
 const flat = board => Int8Array.from(board.flat(2));
@@ -111,7 +111,7 @@ test('aiMove talks to the worker', async () => {
             });
         }
     };
-    const { aiMove } = await import('../static/js/nnAgent.js');
+    const { aiMove } = await import('../public/static/js/nnAgent.js');
     const statuses = [];
     const progress = [];
     const reply = await aiMove([], { simulations: 10, onStatus: s => statuses.push(s), onProgress: (d, t) => progress.push([d, t]) });

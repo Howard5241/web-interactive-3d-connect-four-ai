@@ -1,77 +1,89 @@
 # 3D Connect Four (web app)
 
 Connect Four on a 4x4x4 grid in the browser, with a three.js board, two AI opponents,
-live engine analysis, engine-generated puzzles and shared rooms. The opponents and the
-analysis run **in the browser**; the Flask server only serves the page, the shared room
-state and the puzzle bank.
+live engine analysis, puzzles and shared rooms. The opponents and the analysis run
+**in the browser**. The site runs on Cloudflare: static files plus a small Worker whose
+Durable Objects hold the rooms.
 
 ![Gameplay Demo](./assets/gamePlay.gif)
 
 ## Features
 
+* **Rooms.** The menu creates public rooms (listed on the menu) or private ones (link
+  only). Everyone in a room sees the same board, move list, planning ghosts, ghost lines,
+  puzzles and log, synced over a WebSocket. The first two players to sit down play Light
+  and Dark orange and everyone else watches. With one seat empty, the seated player plays
+  both sides or lets the AI reply.
 * **Opponents.** A ResNet3D + MCTS agent (500 simulations, ONNX Runtime Web on WebGPU or
   WebAssembly) and the C++ minimax engine from
   [3d-connect-four-engine](https://github.com/Howard5241/3d-connect-four-engine) compiled
-  to WebAssembly (3 s per move). Either can auto-reply from the settings panel.
+  to WebAssembly (3 s per move).
 * **Analysis.** Eval bar and ranked moves with continuations, searched by the engine in a
-  Web Worker. Scores are engine units; `M<n>` is an exact mate in n winner moves, `≈M<n>`
-  a proved but not yet shortest mate. Light shows even-depth evals, Dark odd-depth.
+  Web Worker. `M<n>` is an exact mate in n winner moves, `≈M<n>` a proved but not yet
+  shortest mate.
 * **Puzzles.** Every solver move is the only win (or the only draw). Categories group
   by objective mate length: Quick 1–3, Medium 4–5, Long 6–11, Endgame 12+. `.txt`
   puzzle files can also be loaded.
-* **Shared rooms.** Everyone on the page shares one board (`?room=<name>` for a
-  separate one): moves, viewed position, planning ghosts, ghost lines and puzzles.
 * **Board tools.** Hover preview, right-click planning ghosts, right-drag between two
   pieces to draw their four-in-a-row, arrow-key history, move-list paste, hex board
-  code, occlusion outline and mask, and 1-based or 0-based column labels (display only).
+  code, occlusion outline and mask, and 1-based or 0-based column labels.
 
 ## Running locally
 
-Requires Python 3.11 and Flask (`pip install -r requirements.txt`).
+Requires Node 20+.
 
 ```
-python app.py
+npm install
+npm run dev:model   # once: copies the network into the local R2 bucket
+npm run dev
 ```
 
-Open <http://127.0.0.1:5000>. Run `app.py` directly rather than `flask run`: it sets
-`threaded=False`, which the puzzle generator's shared engine process relies on. Puzzle
-generation needs `bin/connect4_3D.exe`, built from the engine repo.
+Open <http://127.0.0.1:8787>. Three.js and ONNX Runtime Web load from CDNs.
 
-Three.js and ONNX Runtime Web load from CDNs. The first AI move downloads about 60 MB
-(the network plus ONNX Runtime), which the browser then caches.
+## Deploying
+
+The network (`public/static/nn/model.onnx`, about 34 MiB) is over Cloudflare's 25 MiB
+limit for static files, so it is served from an R2 bucket instead.
+
+```
+npx wrangler login
+npx wrangler r2 bucket create 3d-connect-four-models
+npm run upload:model   # again whenever model.onnx changes
+npm run deploy
+```
 
 ## Layout
 
 | Path | Role |
 | :--- | :--- |
-| `app.py` | Flask server: page, room API, puzzle API. COOP/COEP headers enable threaded WebAssembly. |
-| `room_state.py`, `static/js/sync.js` | Shared room state (server) and polling client. |
-| `puzzle_bank.py` | Puzzle bank (`puzzles/`) and background generation via the engine's `genpuzzle`. |
-| `static/js/main.js` | Scene, input, game flow, puzzle mode, settings. |
-| `static/js/engine.js`, `engineWorker.js`, `static/engine/` | WebAssembly engine for analysis and minimax. |
-| `static/js/nnAgent.js`, `nnWorker.js`, `nnMcts.js`, `static/nn/model.onnx` | Neural opponent. |
-| `static/js/analysis.js` | Analysis panel. |
-| `static/models/piece.bin`, `static/textures/` | Bead mesh and 512px textures, built from `models/Piece.fbx` and `textures/`. |
+| `wrangler.jsonc` | Worker, static assets, Durable Objects and R2 bucket. |
+| `worker/index.js` | Routes: room API, `/r/<code>` room pages, the network from R2. |
+| `worker/room.js`, `worker/roomCore.js` | One Durable Object per room, and its rules (validation, seats, turns). |
+| `worker/lobby.js` | The list of public rooms. |
+| `public/index.html`, `static/js/menu.js` | Main menu. |
+| `public/room.html`, `static/js/main.js` | Game page: scene, input, game flow, puzzle mode, settings. |
+| `public/static/js/sync.js` | Room client. |
+| `public/puzzles.json`, `static/js/puzzleBank.js` | Puzzle bank, built from `puzzles/` by `tools/build_puzzles.py`. |
+| `public/static/js/engine.js`, `engineWorker.js`, `static/engine/` | WebAssembly engine for analysis and minimax. |
+| `public/static/js/nnAgent.js`, `nnWorker.js`, `nnMcts.js`, `static/nn/model.onnx` | Neural opponent. |
+| `public/static/models/piece.bin`, `static/textures/` | Bead mesh and 512px textures, built from `models/Piece.fbx` and `textures/`. |
+| `puzzle_bank.py`, `puzzle_stats.py`, `puzzle_filter.py` | Bank loading, statistics and curation. |
 | `ai_agent.py`, `game_logic.py`, `models/model_best.pth` | Training-side network, MCTS and rules. |
-| `puzzle_stats.py`, `puzzle_filter.py` | Bank statistics and curation. |
 
 ## Rebuilding assets
 
 | After changing | Run |
 | :--- | :--- |
-| The engine | `./build.ps1 -Wasm -DeployWeb` (or `./build_wasm.sh <this repo>`) in the engine repo |
-| `models/model_best.pth` | `python tools/export_onnx.py` (torch, onnx) |
+| The engine | `./build_wasm.sh ../3d-connect-four-website/public` (or `./build.ps1 -Wasm -DeployWeb -WebApp ../3d-connect-four-website/public`) in the engine repo |
+| `puzzles/` | `python tools/build_puzzles.py` |
+| `models/model_best.pth` | `python tools/export_onnx.py` (torch, onnx), then `npm run upload:model` |
 | `models/Piece.fbx` | `npm i --no-save three@0.160.0 meshoptimizer && node tools/build_piece.mjs` |
 | `textures/` | `python tools/build_textures.py` (Pillow) |
-
-Puzzle generation is tuned with `PUZZLE_SEEDS`, `PUZZLE_BATCH_SECONDS`,
-`PUZZLE_CANDIDATE_SECONDS`, `PUZZLE_DISTANCE_SECONDS` and `PUZZLE_MIN_STEPS`; see the
-engine's [puzzle docs](https://github.com/Howard5241/3d-connect-four-engine/blob/main/docs/PUZZLES.md).
 
 ## Tests
 
 ```
-node --test tests/engine.test.mjs tests/nnAgent.test.mjs
+npm test
 python -m unittest test_puzzle_bank
 ```
 
@@ -79,7 +91,5 @@ python -m unittest test_puzzle_bank
 
 ## Limitations
 
-* Development server only: `debug=True`, a hard-coded secret key, no authentication, and
-  room state is in memory.
-* Anyone with the URL can move in a room; there is no turn ownership.
+* No accounts: a seat belongs to a browser tab until it leaves, and names are unverified.
 * Minimax strength depends on the viewer's machine (fixed 3 s budget).
