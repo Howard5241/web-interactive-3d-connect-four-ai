@@ -1,4 +1,4 @@
-// Request:  { id, command: 'analyze', moves, top, depth, ms } | { id, command: 'bestmove', moves, ms }
+// Request:  { id, command: 'analyze', moves, top, depth, ms, engine } | { id, command: 'bestmove', moves, ms }
 // Replies:  { id, line } per NDJSON line, then { id, exit, error }
 import createEngine from '../engine/connect4_engine.js';
 
@@ -29,8 +29,8 @@ onmessage = async ({ data }) => {
     stderr = [];
     const history = data.moves.length ? data.moves.join(',') : '-';
     const exit = data.command === 'analyze'
-        ? module.ccall('engine_analyze', 'number', ['string', 'number', 'number', 'number'],
-            [history, data.top, data.depth, data.ms])
+        ? module.ccall('engine_analyze', 'number', ['string', 'number', 'number', 'number', 'string'],
+            [history, data.top, data.depth, data.ms, data.engine])
         : module.ccall('engine_bestmove', 'number', ['string', 'number'], [history, data.ms]);
     postMessage({ id: data.id, exit, error: stderr.join('\n') || null });
 };

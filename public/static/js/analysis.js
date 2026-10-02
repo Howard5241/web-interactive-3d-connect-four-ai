@@ -30,6 +30,16 @@ export class AnalysisPanel {
             this.status(this.paused ? 'Paused · last completed evaluation retained' : 'Starting engine…');
             this.tick();
         });
+        try {
+            const saved = localStorage.getItem('c4-analysis-engine');
+            if (saved) this.el('analysis-engine').value = saved;
+        } catch {}
+        this.showEngine();
+        this.el('analysis-engine').addEventListener('change', () => {
+            try { localStorage.setItem('c4-analysis-engine', this.el('analysis-engine').value); } catch {}
+            this.showEngine();
+            this.invalidate();
+        });
         // Display only: the engine ranks every root move regardless.
         this.el('analysis-top').addEventListener('change', () => {
             if (this.data) this.render(this.data);
@@ -69,6 +79,15 @@ export class AnalysisPanel {
         this.showSettings(false);
         this.invalidate();
         this.onToggle();
+    }
+
+    engineName() {
+        return this.el('analysis-engine').value === 'balanced' ? 'balanced' : 'v5';
+    }
+
+    showEngine() {
+        const badge = this.el('analysis-engine-badge');
+        if (badge) badge.textContent = this.engineName() === 'v5' ? 'V5 ENGINE' : 'V4 ENGINE';
     }
 
     showSettings(open) {
@@ -138,14 +157,18 @@ export class AnalysisPanel {
                 return;
             }
             this.render(data);
-        });
+        }, this.engineName());
         job.revision = revision;
         this.job = job;
         this.render(newAnalysisSnapshot(this.moves));
     }
 
     scoreText(row) {
-        if (row.mate_plies != null) return `${row.mate_exact === false ? '≈' : ''}${row.score < 0 ? '−' : ''}M${Math.ceil(row.mate_plies / 2)}`;
+        if (row.mate_plies != null) {
+            const mate = `${row.score < 0 ? '−' : ''}M${Math.ceil(row.mate_plies / 2)}`;
+            if (row.solved === false) return `${mate}?`;
+            return `${row.mate_exact === false ? '≈' : ''}${mate}`;
+        }
         if (row.solved && row.score) return row.score > 0 ? 'L wins' : 'D wins';
         if (row.solved && row.score === 0) return 'Draw';
         return `${row.score > 0 ? '+' : ''}${row.score}`;
@@ -212,6 +235,7 @@ export class AnalysisPanel {
                 score.textContent = this.scoreText(row);
                 score.title = row.mate_exact && row.mate_plies != null
                     ? `Exact mate in ${row.mate_plies} plies after this root move is chosen (including that move); winner mates fastest, defender delays longest`
+                    : row.mate_plies != null && row.solved === false ? 'Mate found by a pruned search; not proved yet'
                     : row.solved && row.score === 0 ? 'Proved draw; no mate distance'
                     : row.solved ? 'Proved outcome; exact mate distance not yet established'
                     : 'Heuristic evaluation in engine units';

@@ -17,10 +17,11 @@ Durable Objects hold the rooms.
 * **Opponents.** A ResNet3D + MCTS agent (500 simulations, ONNX Runtime Web on WebGPU or
   WebAssembly) and the C++ minimax engine from
   [3d-connect-four-engine](https://github.com/Howard5241/3d-connect-four-engine) compiled
-  to WebAssembly (3 s per move).
+  to WebAssembly (Strong V5, 3 s per move).
 * **Analysis.** Eval bar and ranked moves with continuations, searched by the engine in a
-  Web Worker. `M<n>` is an exact mate in n winner moves, `≈M<n>` a proved but not yet
-  shortest mate.
+  Web Worker, either V5 (default) or the V4 balanced solver. `M<n>` is an exact mate in
+  n winner moves, `≈M<n>` a proved but not yet shortest mate, and `M<n>?` a mate V5 found
+  with pruning (below 32 stones) that is not proved yet.
 * **Puzzles.** Every solver move is the only win (or the only draw). Categories group
   by objective mate length: Quick 1–3, Medium 4–5, Long 6–11, Endgame 12+.
 * **Board tools.** Hover preview, right-click planning ghosts, right-drag between two

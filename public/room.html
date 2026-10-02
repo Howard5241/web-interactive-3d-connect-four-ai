@@ -161,6 +161,10 @@
         </div>
         <div id="analysis-settings" class="hidden" role="dialog" aria-label="Analysis settings">
             <div class="analysis-setting">
+                <label for="analysis-engine">Engine</label>
+                <select id="analysis-engine"><option value="v5" selected>V5</option><option value="balanced">V4 balanced</option></select>
+            </div>
+            <div class="analysis-setting">
                 <label for="analysis-top">Top moves</label>
                 <select id="analysis-top"><option>1</option><option selected>3</option><option>5</option><option>8</option><option>16</option></select>
             </div>
@@ -177,8 +181,8 @@
         <div id="analysis-lines"></div>
         <footer class="analysis-footer">
             <span id="analysis-stats">Waiting for a completed iteration</span>
-            <button type="button" class="analysis-info" aria-label="How to read these scores" title="+ favors Light orange · − favors Dark orange&#10;&#10;Scores are engine units, not pawns or win probabilities. M = proved win in the indicated number of winner’s moves (not necessarily shortest). Lines may stop at a tactical or table cutoff.">ⓘ</button>
-            <span class="engine-badge">V4 ENGINE</span>
+            <button type="button" class="analysis-info" aria-label="How to read these scores" title="+ favors Light orange · − favors Dark orange&#10;&#10;Scores are engine units, not pawns or win probabilities. M = proved win in the indicated number of winner’s moves (not necessarily shortest). M? = mate found by V5’s pruned search, not proved yet. Lines may stop at a tactical or table cutoff.">ⓘ</button>
+            <span class="engine-badge" id="analysis-engine-badge">V5 ENGINE</span>
         </footer>
     </aside>
 
