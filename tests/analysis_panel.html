@@ -11,6 +11,7 @@
   <button id="analysis-pause">Pause</button>
   <button id="analysis-settings-btn">Settings</button>
   <div id="analysis-settings" class="hidden">
+    <select id="analysis-engine"><option value="v5">V5</option><option value="balanced">V4 balanced</option></select>
     <select id="analysis-top"><option value="3">3</option></select>
     <input id="analysis-best-toggle" type="checkbox" checked>
   </div>
@@ -40,6 +41,7 @@ assert(document.querySelector('.analysis-score').textContent === 'L wins', 'Time
 assert(panel.scoreText({ score: -29994, mate_plies: 6, mate_exact: true }) === '−M3', 'Dark exact mate sign');
 assert(panel.scoreText({ score: 29993, mate_plies: 7, mate_exact: false }) === '≈M4', 'Uncertified mate must be provisional');
 assert(panel.scoreText({ score: 0, solved: true, mate_plies: null }) === 'Draw', 'Draw label');
+assert(panel.scoreText({ score: -29991, solved: false, mate_plies: 9, mate_exact: false }) === '−M5?', 'Pruned mate must be unproved');
 panel.render({ ...snapshot, running: false, phase: 'complete', mate_complete: true,
     moves: [{ move: 5, score: 29968, solved: true, mate_exact: true, mate_plies: 32, pv: [5] }],
 });

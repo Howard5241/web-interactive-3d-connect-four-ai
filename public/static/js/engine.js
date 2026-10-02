@@ -86,12 +86,13 @@ export function applyAnalysisLine(snapshot, update) {
 }
 
 // onSnapshot gets a copy on every change; the last has running: false (and error on failure).
-export function analyze(moves, onSnapshot) {
+// engineName: 'v5' or 'balanced'.
+export function analyze(moves, onSnapshot, engineName = 'v5') {
     const snapshot = newAnalysisSnapshot(moves);
     const publish = () => onSnapshot(structuredClone(snapshot));
     let received = false;
     let error = null;
-    const job = engine.run({ command: 'analyze', moves, ...ANALYSIS }, line => {
+    const job = engine.run({ command: 'analyze', moves, engine: engineName, ...ANALYSIS }, line => {
         if (error) return;
         try {
             if (line?.type !== 'done') received = true;

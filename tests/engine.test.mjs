@@ -98,6 +98,14 @@ test('a new request cancels the running search', async () => {
         { id: workers.at(-1).requests.at(-1).id, command: 'bestmove', moves: [0, 1], ms: 3000 });
 });
 
+test('analysis requests name the engine, V5 by default', async () => {
+    script = () => ({ lines: [iteration(2), { type: 'done' }] });
+    await analyzeAll([]);
+    assert.equal(workers.at(-1).requests.at(-1).engine, 'v5');
+    await new Promise(resolve => analyze([], s => { if (!s.running) resolve(); }, 'balanced'));
+    assert.equal(workers.at(-1).requests.at(-1).engine, 'balanced');
+});
+
 test('bestMove rejects when the engine fails', async () => {
     script = () => ({ lines: [], exit: 2, error: 'Game is already over' });
     await assert.rejects(bestMove([0, 4, 1, 5, 2, 6, 3]), /Game is already over/);
@@ -112,8 +120,8 @@ function run(fn, types, args) {
     const exit = wasm.ccall(fn, 'number', types, args);
     return { exit, lines: output };
 }
-const analyzeWasm = (history, top, depth, ms) =>
-    run('engine_analyze', ['string', 'number', 'number', 'number'], [history, top, depth, ms]);
+const analyzeWasm = (history, top, depth, ms, engine = 'balanced') =>
+    run('engine_analyze', ['string', 'number', 'number', 'number', 'string'], [history, top, depth, ms, engine]);
 const bestMoveWasm = (history, ms) => run('engine_bestmove', ['string', 'number'], [history, ms]);
 
 const WINNING_MASKS = (() => {
@@ -137,10 +145,10 @@ const WINNING_MASKS = (() => {
 })();
 const wins = board => WINNING_MASKS.some(mask => (board & mask) === mask);
 
-test('analysis ranks every root move at every depth, from both sides', () => {
+test('analysis ranks every root move at every depth, from both sides, with both engines', () => {
     assert.equal(WINNING_MASKS.length, 76);
-    for (const history of ['-', '0']) {
-        const { exit, lines } = analyzeWasm(history, 16, 4, 10000);
+    for (const [history, engine] of [['-', 'balanced'], ['0', 'balanced'], ['-', 'v5'], ['0', 'v5']]) {
+        const { exit, lines } = analyzeWasm(history, 16, 4, 10000, engine);
         assert.equal(exit, 0);
         const iterations = lines.filter(l => l.type === 'iteration');
         assert.deepEqual(iterations.map(l => l.depth), [1, 2, 3, 4]);
@@ -165,6 +173,7 @@ test('terminal positions, immediate mates and bad input', () => {
     assert.equal(bestMoveWasm('0,4,1,5,2,6', 1000).lines[0].move, 3, 'must take the win');
     assert.equal(bestMoveWasm('0,4,1,5,2', 1000).lines[0].move, 3, 'must block the win');
     assert.equal(analyzeWasm('0,0,0,0,0', 3, 4, 1000).exit, 2, 'full column');
+    assert.equal(analyzeWasm('-', 3, 4, 1000, 'v9').exit, 2, 'unknown engine');
     assert.equal(bestMoveWasm('0,4,1,5,2,6,3', 1000).exit, 2, 'game over');
     assert.equal(bestMoveWasm('16', 1000).exit, 2, 'bad column');
 });
@@ -179,7 +188,7 @@ test('bestmove respects its time limit and plays a legal column', () => {
     assert.ok(lines[0].depth > 1);
 });
 
-test('exact mate refinement matches an exhaustive oracle, both colors', () => {
+test('exact mate refinement matches an exhaustive oracle, both colors and engines', () => {
     // Late nonterminal histories built independently of the engine, and a tiny
     // exhaustive distance oracle with no threats or pruning.
     let seed = 9082641;
@@ -234,17 +243,19 @@ test('exact mate refinement matches an exhaustive oracle, both colors', () => {
             expected[col] = side === 0 ? value : -value;
         });
 
-        const { lines } = analyzeWasm(history.join(','), 16, 64, 10000);
-        const final = lines.filter(l => l.type === 'iteration').at(-1);
-        assert.ok(final.mate_complete);
-        assert.equal(final.phase, 'complete');
-        assert.deepEqual(Object.fromEntries(final.moves.map(r => [r.move, r.score])), expected);
-        const scores = final.moves.map(r => r.score);
-        assert.deepEqual(scores, [...scores].sort((a, b) => side === 0 ? b - a : a - b));
-        for (const row of final.moves) {
-            assert.ok(row.solved && row.mate_exact);
-            assert.equal(row.mate_plies, row.score ? 30000 - Math.abs(row.score) : null);
+        for (const engine of ['balanced', 'v5']) {
+            const { lines } = analyzeWasm(history.join(','), 16, 64, 10000, engine);
+            const final = lines.filter(l => l.type === 'iteration').at(-1);
+            assert.ok(final.mate_complete);
+            assert.equal(final.phase, 'complete');
+            assert.deepEqual(Object.fromEntries(final.moves.map(r => [r.move, r.score])), expected);
+            const scores = final.moves.map(r => r.score);
+            assert.deepEqual(scores, [...scores].sort((a, b) => side === 0 ? b - a : a - b));
+            for (const row of final.moves) {
+                assert.ok(row.solved && row.mate_exact);
+                assert.equal(row.mate_plies, row.score ? 30000 - Math.abs(row.score) : null);
         }
         assert.equal(lines.at(-1).timed_out, false);
+        }
     }
 });
